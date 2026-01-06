@@ -1,387 +1,570 @@
-# 🔐 Ab0t Auth
+# Ab0t Auth
 
-### Stop Building Auth. Start Building Features.
+A functional, async-first authentication and authorization library for **FastAPI** and **Flask** applications using Ab0t auth service.
 
-**The fastest way to add enterprise-grade authentication to your FastAPI apps.**
+## Features
 
-[![PyPI](https://img.shields.io/pypi/v/ab0t-auth)](https://pypi.org/project/ab0t-auth/)
-[![Python](https://img.shields.io/pypi/pyversions/ab0t-auth)](https://pypi.org/project/ab0t-auth/)
-[![License](https://img.shields.io/github/license/ab0t-com/auth_wrapper)](LICENSE)
-[![Tests](https://img.shields.io/github/actions/workflow/status/ab0t-com/auth_wrapper/tests.yml)](https://github.com/ab0t-com/auth_wrapper/actions)
+- **Multi-Framework Support** - First-class support for both FastAPI and Flask
+- **Pure Functional Design** - Business logic as pure functions, classes only for infrastructure
+- **Async-First** - All I/O operations are non-blocking for high throughput
+- **Type-Safe** - Full type hints with immutable dataclasses
+- **Local JWT Validation** - Validate tokens locally using JWKS (no API calls)
+- **Flexible Auth Methods** - JWT tokens and API keys supported
+- **Permission System** - Client-side and server-side permission checking
+- **Pattern Matching** - Glob-style permission patterns (e.g., `admin:*`)
+- **Multi-Tenancy** - Built-in support for tenant and organization isolation
+- **Multiple Integration Styles** - Dependencies, middleware, or decorators
+- **Built-in Caching** - Token and permission caching for performance
+- **Observability** - Structured logging with metrics at key decision points
 
----
-
-## 🚀 Why Ab0t Auth?
-
-**Authentication is table stakes. But it's eating your roadmap.**
-
-Every FastAPI project needs auth. Every team reinvents it. Every implementation has gaps. You're not shipping features—you're debugging JWT expiration edge cases at 2 AM.
-
-**We fixed that.**
-
-Ab0t Auth drops enterprise authentication into your FastAPI app in **under 5 minutes**. One import. One line of config. Done.
-
-```python
-from ab0t_auth import AuthGuard, require_auth
-
-auth = AuthGuard(auth_url="https://auth.service.ab0t.com")
-
-@app.get("/api/data")
-async def get_data(user = Depends(require_auth(auth))):
-    return {"user": user.user_id}  # That's it. You're protected.
-```
-
----
-
-## 💡 The Problem We Solve
-
-| Without Ab0t Auth | With Ab0t Auth |
-|-------------------|----------------|
-| 2-4 weeks building auth | 5 minutes to production |
-| Custom JWT validation code | Battle-tested, RFC-compliant |
-| Permission spaghetti | Clean, declarative permissions |
-| Security vulnerabilities | Audited, secure by default |
-| No caching = slow APIs | Built-in high-performance caching |
-| Scattered auth logic | One unified interface |
-
-**Real talk:** Your competitors aren't waiting while you build auth from scratch.
-
----
-
-## ⚡ Installation
-
-### From GitHub (Latest)
+## Installation
 
 ```bash
-pip install git+https://github.com/ab0t-com/auth_wrapper.git
+# Install with FastAPI support
+pip install ab0t-auth[fastapi]
+
+# Install with Flask support
+pip install ab0t-auth[flask]
+
+# Install with both frameworks
+pip install ab0t-auth[all]
 ```
 
-### From PyPI (Stable)
+## Quick Start
 
-```bash
-pip install ab0t-auth
-```
-
-### With All Dependencies
-
-```bash
-pip install "ab0t-auth[dev]"  # Includes testing tools
-```
-
-### Verify Installation
-
-```bash
-python -c "from ab0t_auth import AuthGuard; print('✅ Ready to ship!')"
-```
-
----
-
-## 🎯 Quick Start (5 Minutes to Protected API)
-
-### Step 1: Initialize
+### FastAPI Setup
 
 ```python
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from ab0t_auth import AuthGuard, require_auth, AuthenticatedUser
 
-# Your Ab0t auth service URL
+# Initialize the auth guard
 auth = AuthGuard(auth_url="https://auth.service.ab0t.com")
 
+# Setup lifespan for proper initialization/cleanup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with auth.lifespan():
         yield
 
 app = FastAPI(lifespan=lifespan)
+
+# Protect a route
+@app.get("/protected")
+async def protected_route(user: AuthenticatedUser = Depends(require_auth(auth))):
+    return {"user_id": user.user_id, "email": user.email}
 ```
 
-### Step 2: Protect Routes
+### With Permissions
 
 ```python
-@app.get("/public")
-async def public():
-    return {"message": "Anyone can see this"}
+from ab0t_auth import require_permission, require_any_permission
 
-@app.get("/protected")
-async def protected(user: AuthenticatedUser = Depends(require_auth(auth))):
-    return {"message": f"Hello {user.email}!"}
+@app.delete("/users/{id}")
+async def delete_user(
+    id: int,
+    user: AuthenticatedUser = Depends(require_permission(auth, "users:delete"))
+):
+    return {"deleted": id}
+
+@app.get("/admin")
+async def admin_panel(
+    user: AuthenticatedUser = Depends(require_any_permission(auth, "admin:access", "super:admin"))
+):
+    return {"admin": True}
 ```
 
-### Step 3: Ship It 🚀
+### Using Middleware
+
+```python
+from ab0t_auth import AuthMiddleware, setup_auth_middleware
+
+# Option 1: Simple setup
+setup_auth_middleware(
+    app, auth,
+    exclude_paths=["/health", "/docs"],
+    require_auth_paths=["/api/*"],
+)
+
+# Option 2: Manual middleware
+app.add_middleware(
+    AuthMiddleware,
+    guard=auth,
+    exclude_paths=["/health", "/docs", "/openapi.json"],
+)
+
+# Access user in routes
+@app.get("/me")
+async def get_me(request: Request):
+    user = request.state.auth_user  # Set by middleware
+    return {"user_id": user.user_id if user else None}
+```
+
+### Using Decorators (slowapi-style)
+
+```python
+from ab0t_auth import protected, permission_required
+
+@app.get("/dashboard")
+@protected(auth)
+async def dashboard(request: Request, auth_user: AuthenticatedUser):
+    return {"user": auth_user.user_id}
+
+@app.post("/admin/action")
+@permission_required(auth, "admin:write")
+async def admin_action(request: Request, auth_user: AuthenticatedUser):
+    return {"performed": True}
+```
+
+### Class-Based Decorators
+
+```python
+from ab0t_auth.decorators import Auth
+
+# Create decorator instance
+auth_decorator = Auth(auth)
+
+@app.get("/profile")
+@auth_decorator.protected()
+async def profile(request: Request, auth_user: AuthenticatedUser):
+    return {"user": auth_user.email}
+
+@app.delete("/resource")
+@auth_decorator.permission("resources:delete")
+async def delete_resource(request: Request, auth_user: AuthenticatedUser):
+    return {"deleted": True}
+```
+
+### Flask Setup
+
+```python
+from flask import Flask
+from ab0t_auth.flask import (
+    Ab0tAuth,
+    get_current_user,
+    login_required,
+    permission_required,
+)
+
+app = Flask(__name__)
+auth = Ab0tAuth(app, auth_url="https://auth.service.ab0t.com")
+
+@app.route("/protected")
+@login_required
+def protected_route():
+    user = get_current_user()
+    return {"user_id": user.user_id, "email": user.email}
+
+@app.route("/admin")
+@permission_required("admin:access")
+def admin_panel():
+    user = get_current_user()
+    return {"admin": True, "user": user.user_id}
+```
+
+### Flask with Permissions
+
+```python
+from ab0t_auth.flask import (
+    permissions_required,
+    role_required,
+    permission_pattern_required,
+)
+
+# Require all permissions
+@app.route("/sensitive")
+@permissions_required("data:read", "data:write", require_all=True)
+def sensitive_data():
+    return {"data": "sensitive"}
+
+# Require any permission
+@app.route("/reports")
+@permissions_required("reports:read", "admin:access", require_all=False)
+def get_reports():
+    return {"reports": [...]}
+
+# Role-based access
+@app.route("/admin/dashboard")
+@role_required("admin")
+def admin_dashboard():
+    return {"dashboard": "admin"}
+
+# Pattern matching
+@app.route("/users/settings")
+@permission_pattern_required("users:*")
+def user_settings():
+    return {"settings": {...}}
+```
+
+### Flask Factory Pattern
+
+```python
+from flask import Flask
+from ab0t_auth.flask import Ab0tAuth
+
+auth = Ab0tAuth()
+
+def create_app():
+    app = Flask(__name__)
+    app.config["AB0T_AUTH_URL"] = "https://auth.service.ab0t.com"
+
+    auth.init_app(app)
+
+    return app
+```
+
+## Configuration
+
+### Environment Variables
 
 ```bash
-uvicorn main:app --reload
+AB0T_AUTH_AUTH_URL=https://auth.service.ab0t.com
+AB0T_AUTH_ORG_ID=your_org_id
+AB0T_AUTH_AUDIENCE=your-api
+AB0T_AUTH_ISSUER=https://auth.service.ab0t.com
+AB0T_AUTH_DEBUG=false
+AB0T_AUTH_JWKS_CACHE_TTL=300
+AB0T_AUTH_TOKEN_CACHE_TTL=60
 ```
 
-**That's it.** Your API now has enterprise authentication.
+### Programmatic Configuration
 
----
-
-## 🔥 Features That Make Teams Switch
-
-### 🎨 Three Integration Styles (Pick Your Favorite)
-
-**Dependencies** (Most Popular)
 ```python
-@app.get("/users")
-async def list_users(user = Depends(require_permission(auth, "users:read"))):
-    ...
+from ab0t_auth import AuthGuard, AuthConfig
+from ab0t_auth.config import create_config
+
+# Using AuthConfig directly
+config = AuthConfig(
+    auth_url="https://auth.service.ab0t.com",
+    org_id="my_org",
+    audience="my-api",
+    algorithms=("RS256",),
+    jwks_cache_ttl=300,
+    token_cache_ttl=60,
+    enable_api_key_auth=True,
+    enable_jwt_auth=True,
+)
+
+auth = AuthGuard(config=config)
+
+# Or using factory function
+config = create_config(
+    auth_url="https://auth.service.ab0t.com",
+    org_id="my_org",
+    audience="my-api",
+)
 ```
 
-**Decorators** (Flask-style)
-```python
-@app.get("/admin")
-@permission_required(auth, "admin:access")
-async def admin_panel(request: Request, auth_user: AuthenticatedUser):
-    ...
-```
+## Permission Checking
 
-**Middleware** (Set & Forget)
-```python
-app.add_middleware(AuthMiddleware, guard=auth, exclude_paths=["/health"])
-```
-
-### 🔒 Permission System That Actually Works
+### Client-Side (Fast, Offline)
 
 ```python
+from ab0t_auth.permissions import (
+    check_permission,
+    check_any_permission,
+    check_all_permissions,
+    check_permission_pattern,
+)
+
 # Single permission
-require_permission(auth, "billing:read")
+result = check_permission(user, "users:read")
+if result.allowed:
+    # Proceed
 
-# Any of these
-require_any_permission(auth, "admin:*", "billing:manage")
+# Any of multiple
+result = check_any_permission(user, "admin:access", "super:admin")
 
 # All required
-require_all_permissions(auth, "users:read", "users:write")
+result = check_all_permissions(user, "billing:read", "billing:write")
 
-# Pattern matching (glob-style!)
-require_permission_pattern(auth, "org:*:admin")
+# Pattern matching
+result = check_permission_pattern(user, "users:*")  # Matches users:read, users:write, etc.
 ```
 
-### 🏢 Multi-Tenancy Built In
-
-Ab0t is multi-tenant by design. Each user belongs to a tenant (company), with support for nested organizations.
+### Server-Side (Authoritative)
 
 ```python
-from ab0t_auth.tenant import TenantConfig, require_tenant, require_org
+from ab0t_auth.permissions import verify_permission
+
+# Make API call to Ab0t service for authoritative check
+result = await verify_permission(
+    client, config, token, user,
+    permission="sensitive:action",
+    resource_id="resource_123",
+)
+```
+
+### Predicate Builders
+
+```python
+from ab0t_auth.permissions import has_permission, has_role, has_permission_pattern
+
+# Create reusable predicates
+is_admin = has_role("admin")
+can_write = has_permission("data:write")
+has_admin_access = has_permission_pattern("admin:*")
+
+if is_admin(user) or can_write(user):
+    # Proceed
+```
+
+## Error Handling
+
+```python
+from ab0t_auth.errors import (
+    AuthError,
+    TokenExpiredError,
+    TokenInvalidError,
+    TokenNotFoundError,
+    PermissionDeniedError,
+    AuthServiceError,
+)
+from ab0t_auth.middleware import register_auth_exception_handlers
+
+# Register exception handlers for consistent error responses
+register_auth_exception_handlers(app)
+
+# Or handle manually
+@app.exception_handler(PermissionDeniedError)
+async def handle_permission_denied(request: Request, exc: PermissionDeniedError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.to_dict(),
+    )
+```
+
+## API Key Authentication
+
+```python
+# API keys are supported by default
+# Send via X-API-Key header
+
+# Disable API key auth if not needed
+auth = AuthGuard(
+    auth_url="https://auth.service.ab0t.com",
+    enable_api_key_auth=False,
+)
+
+# Or per-route
+@app.get("/jwt-only")
+async def jwt_only(
+    user: AuthenticatedUser = Depends(require_auth(auth, allow_api_key=False))
+):
+    return {"method": user.auth_method}
+```
+
+## Cache Management
+
+```python
+# Invalidate specific token
+auth.invalidate_token(token)
+
+# Invalidate user's cached permissions
+auth.invalidate_user_permissions(user_id)
+
+# Clear all caches
+auth.clear_caches()
+
+# Access metrics
+print(auth.metrics.to_dict())
+# {
+#     "auth_attempts": 1000,
+#     "auth_successes": 950,
+#     "cache_hit_rate": 0.85,
+#     ...
+# }
+```
+
+## Advanced Usage
+
+### Optional Authentication
+
+```python
+from ab0t_auth import optional_auth
+
+@app.get("/content")
+async def get_content(user: AuthenticatedUser | None = Depends(optional_auth(auth))):
+    if user:
+        return {"content": "premium", "user": user.user_id}
+    return {"content": "basic"}
+```
+
+### Organization-Scoped Routes
+
+```python
+from ab0t_auth.dependencies import require_org_membership, require_org
+
+@app.get("/org/settings")
+async def org_settings(
+    user: AuthenticatedUser = Depends(require_org_membership(auth))
+):
+    return {"org_id": user.org_id}
+
+@app.get("/orgs/acme/data")
+async def acme_data(
+    user: AuthenticatedUser = Depends(require_org(auth, "acme"))
+):
+    return {"data": "acme-specific"}
+```
+
+### Full Auth Context
+
+```python
+from ab0t_auth.dependencies import get_auth_context
+from ab0t_auth.core import AuthContext
+
+@app.get("/audit")
+async def audit(ctx: AuthContext = Depends(get_auth_context(auth))):
+    return {
+        "user_id": ctx.user.user_id if ctx.user else None,
+        "request_id": ctx.request_id,
+        "timestamp": ctx.timestamp.isoformat(),
+        "is_authenticated": ctx.is_authenticated,
+    }
+```
+
+## Multi-Tenancy
+
+Ab0t Auth includes built-in multi-tenancy support where each user is a tenant and can belong to organizations (including nested organizations).
+
+### FastAPI Multi-Tenancy
+
+```python
+from ab0t_auth.tenant import (
+    TenantConfig,
+    require_tenant,
+    require_org,
+    require_tenant_permission,
+)
+
+# Configure tenant behavior
+tenant_config = TenantConfig(
+    enforce_tenant_isolation=True,
+    enforce_org_isolation=False,
+    allow_cross_tenant_admin=True,
+    enable_org_hierarchy=True,
+)
+
+# Require tenant context
+@app.get("/tenant/data")
+async def tenant_data(
+    tenant_ctx = Depends(require_tenant(auth, tenant_config))
+):
+    return {
+        "tenant_id": tenant_ctx.tenant_id,
+        "org_id": tenant_ctx.org_id,
+    }
+
+# Require specific organization
+@app.get("/orgs/{org_id}/data")
+async def org_data(
+    org_id: str,
+    tenant_ctx = Depends(require_org(auth, tenant_config, org_id))
+):
+    return {"org_id": org_id, "data": "org-specific"}
+
+# Tenant-scoped permissions
+@app.delete("/tenant/users/{user_id}")
+async def delete_tenant_user(
+    user_id: str,
+    tenant_ctx = Depends(require_tenant_permission(auth, tenant_config, "users:delete"))
+):
+    return {"deleted": user_id}
+```
+
+### Flask Multi-Tenancy
+
+```python
+from ab0t_auth.tenant import TenantConfig, tenant_required
 
 tenant_config = TenantConfig(
     enforce_tenant_isolation=True,
     enable_org_hierarchy=True,
-    allow_cross_tenant_admin=True,
 )
 
-# Tenant-scoped routes
-@app.get("/tenants/{tenant_id}/data")
-async def tenant_data(
-    tenant_id: str,
-    ctx = Depends(require_tenant(auth, config=tenant_config))
-):
-    return {"tenant": ctx.tenant_id, "org": ctx.org_id}
-
-# Organization hierarchy support
-@app.get("/orgs/{org_id}/members")
-async def org_members(
-    org_id: str,
-    ctx = Depends(require_org(auth, config=tenant_config))
-):
-    # Automatically validates org access based on hierarchy
-    return {"org": ctx.org_id, "path": ctx.org_path}
+@app.route("/tenant/dashboard")
+@tenant_required(tenant_config)
+def tenant_dashboard():
+    from flask import g
+    tenant_ctx = g.tenant_context
+    return {"tenant_id": tenant_ctx.tenant_id}
 ```
 
-**Features:**
-- **Tenant Isolation** - Users can only access their tenant's data
-- **Nested Organizations** - Parent/child org hierarchy with inheritance
-- **Cross-Tenant Admin** - Admins with special permissions can access any tenant
-- **Flexible Extraction** - Get tenant from token, header, path, or subdomain
-
-```
-Tenant (Company)
-└── Organization (root)
-    ├── Engineering
-    │   ├── Backend Team
-    │   └── Frontend Team
-    └── Sales
-        └── Enterprise
-```
-
-### ⚡ Blazing Fast (1000+ req/sec)
-
-- **Local JWT validation** - No auth service round-trip
-- **Intelligent caching** - Tokens, permissions, JWKS
-- **Async everything** - Non-blocking I/O throughout
-- **Connection pooling** - HTTP/2 with keepalive
-
-### 🛡️ Security You Can Trust
-
-- RFC 7517/7519 compliant JWT validation
-- JWKS key rotation handled automatically
-- Token expiration with configurable leeway
-- API key support for service-to-service
-- No secrets in your codebase
-
----
-
-## ❓ FAQ
-
-### "Why not just use FastAPI's built-in security?"
-
-FastAPI's security utilities are primitives—they give you building blocks. Ab0t Auth gives you the whole house. You get JWT validation, JWKS fetching, permission checking, caching, and error handling out of the box.
-
-### "Does this work with my existing Ab0t setup?"
-
-**Yes!** If you're using Ab0t's auth service, this is the official client library. It speaks the same language as your backend.
-
-### "What about API keys for my service accounts?"
-
-Built in. Just set the `X-API-Key` header. We validate it against Ab0t and give you the same `AuthenticatedUser` object.
+### Tenant Extraction Strategies
 
 ```python
-# Works with both JWT and API keys automatically
-@app.get("/webhook")
-async def webhook(user = Depends(require_auth(auth))):
-    # user.auth_method tells you which was used
-    ...
+from ab0t_auth.tenant import TenantExtractionStrategy
+
+# From JWT token claims (default)
+TenantExtractionStrategy.TOKEN
+
+# From X-Tenant-ID header
+TenantExtractionStrategy.HEADER
+
+# From URL path (/tenants/{id}/...)
+TenantExtractionStrategy.PATH
+
+# From subdomain (tenant.example.com)
+TenantExtractionStrategy.SUBDOMAIN
+
+# From query parameter (?tenant_id=...)
+TenantExtractionStrategy.QUERY
 ```
 
-### "How do I handle different environments?"
+### Cross-Tenant Admin Access
 
-Environment variables. Zero code changes.
+```python
+tenant_config = TenantConfig(
+    allow_cross_tenant_admin=True,
+    cross_tenant_permission="admin:cross_tenant",
+)
+
+# Users with "admin:cross_tenant" permission can access any tenant
+```
+
+## Architecture
+
+This library follows functional programming principles:
+
+1. **Pure Functions** - Business logic has no side effects
+2. **Immutable Data** - All data structures are frozen dataclasses
+3. **Explicit Dependencies** - All inputs passed explicitly
+4. **Async I/O** - Non-blocking for 1000+ req/sec throughput
+5. **Type Safety** - Full type hints throughout
+
+```
+ab0t_auth/
+├── core.py           # Immutable types and schemas
+├── guard.py          # Main AuthGuard coordinator
+├── jwt.py            # JWT validation functions
+├── permissions.py    # Permission checking functions
+├── tenant.py         # Multi-tenancy support
+├── client.py         # Async HTTP client
+├── cache.py          # Token/permission caching
+├── dependencies.py   # FastAPI dependencies
+├── middleware.py     # ASGI middleware
+├── decorators.py     # FastAPI route decorators
+├── flask.py          # Flask extension and decorators
+├── config.py         # Configuration management
+├── errors.py         # Error types
+└── logging.py        # Structured logging
+```
+
+## Testing
 
 ```bash
-# Development
-AB0T_AUTH_AUTH_URL=https://auth.dev.ab0t.com
+# Install dev dependencies
+pip install -e ".[dev]"
 
-# Production
-AB0T_AUTH_AUTH_URL=https://auth.service.ab0t.com
-AB0T_AUTH_DEBUG=false
+# Run tests
+pytest
+
+# With coverage
+pytest --cov=ab0t_auth --cov-report=html
 ```
 
-### "What if the auth service goes down?"
+## License
 
-Local JWT validation means you keep running. We cache JWKS keys, so even if Ab0t is briefly unavailable, your existing tokens still validate.
-
-### "Can I check permissions without blocking?"
-
-Yes! Client-side checks use token claims (instant). Server-side checks call Ab0t (authoritative).
-
-```python
-# Instant (from token)
-if user.has_permission("admin:access"):
-    ...
-
-# Authoritative (API call)
-result = await verify_permission(client, config, token, user, "sensitive:action")
-```
-
-### "Is this production-ready?"
-
-Teams are running this in production right now. We have comprehensive tests, type safety throughout, and structured logging for observability.
-
----
-
-## 🗺️ Roadmap
-
-### ✅ v0.1.0 (Current)
-- [x] JWT validation with JWKS
-- [x] API key authentication
-- [x] Permission checking (client + server)
-- [x] FastAPI dependencies
-- [x] Middleware support
-- [x] Decorator support
-- [x] Token caching
-- [x] Structured logging
-- [x] Flask support
-- [x] Multi-tenancy with nested orgs
-
-### 🔜 v0.2.0 (Next)
-- [ ] OAuth2 flow helpers (Google, GitHub, etc.)
-- [ ] Session management utilities
-- [ ] Rate limiting integration
-- [ ] WebSocket authentication
-- [ ] Service account enhancements
-
-### 🔮 v0.3.0 (Future)
-- [ ] Admin dashboard integration
-- [ ] Audit logging to Ab0t
-- [ ] Custom claim validators
-- [ ] gRPC support
-- [ ] OpenTelemetry traces
-
-### 💭 Under Consideration
-- GraphQL integration
-- Django adapter
-- Kubernetes sidecar mode
-- Edge function support
-
-**Want to influence the roadmap?** [Open an issue](https://github.com/ab0t-com/auth_wrapper/issues) or [join the discussion](https://github.com/ab0t-com/auth_wrapper/discussions).
-
----
-
-## 📊 Performance
-
-Benchmarked on a standard 4-core VM:
-
-| Scenario | Requests/sec | Latency (p99) |
-|----------|-------------|---------------|
-| Cached token validation | 12,000+ | 2ms |
-| Fresh JWT validation | 8,000+ | 5ms |
-| Permission check (local) | 15,000+ | 1ms |
-| Permission check (server) | 2,000+ | 25ms |
-
-**Translation:** Auth won't be your bottleneck.
-
----
-
-## 🤝 Support & Community
-
-- 📖 **Documentation:** [docs.ab0t.com/auth-wrapper](https://docs.ab0t.com/auth-wrapper)
-- 💬 **Discord:** [Join our community](https://discord.gg/ab0t)
-- 🐛 **Issues:** [GitHub Issues](https://github.com/ab0t-com/auth_wrapper/issues)
-- 💡 **Feature Requests:** [GitHub Discussions](https://github.com/ab0t-com/auth_wrapper/discussions)
-- 📧 **Enterprise:** enterprise@ab0t.com
-
----
-
-## 🏢 Trusted By
-
-> *"We cut our auth implementation from 3 weeks to 2 hours. The permission system alone saved us months of maintenance."*
-> — **Senior Engineer, Series B Startup**
-
-> *"Finally, auth that just works. Our team can focus on features instead of security edge cases."*
-> — **CTO, FinTech Company**
-
-> *"The caching and async design gave us 10x throughput improvement over our previous auth middleware."*
-> — **Platform Lead, E-commerce Scale-up**
-
----
-
-## 📜 License
-
-MIT License - Use it, modify it, ship it. See [LICENSE](LICENSE) for details.
-
----
-
-## 🚀 Get Started Now
-
-```bash
-pip install git+https://github.com/ab0t-com/auth_wrapper.git
-```
-
-```python
-from ab0t_auth import AuthGuard, require_auth
-
-auth = AuthGuard(auth_url="https://auth.service.ab0t.com")
-
-# You're done. Go ship something amazing.
-```
-
----
-
-<p align="center">
-  <b>Stop building auth. Start building the future.</b>
-  <br><br>
-  <a href="https://github.com/ab0t-com/auth_wrapper">⭐ Star us on GitHub</a> •
-  <a href="https://docs.ab0t.com/auth-wrapper">📖 Read the Docs</a> •
-  <a href="https://discord.gg/ab0t">💬 Join Discord</a>
-</p>
+MIT License - see LICENSE file for details.
