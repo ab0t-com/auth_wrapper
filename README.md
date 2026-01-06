@@ -320,14 +320,45 @@ Teams are running this in production right now. We have comprehensive tests, typ
 
 ## Performance
 
-Benchmarked on a standard 4-core VM:
+Run benchmarks yourself:
 
-| Scenario | Requests/sec | Latency (p99) |
-|----------|-------------|---------------|
-| Cached token validation | 12,000+ | 2ms |
-| Fresh JWT validation | 8,000+ | 5ms |
-| Permission check (local) | 15,000+ | 1ms |
-| Permission check (server) | 2,000+ | 25ms |
+```bash
+source .venv/bin/activate && python scripts/benchmark.py --quick
+```
+
+**Results (local operations):**
+
+| Benchmark | Ops/sec | Avg Latency | P99 Latency |
+|-----------|---------|-------------|-------------|
+| `check_permission` | 420,000+ | 0.002ms | 0.003ms |
+| `check_any_permission` | 330,000+ | 0.002ms | 0.002ms |
+| `check_all_permissions` | 195,000+ | 0.004ms | 0.005ms |
+| `check_permission_pattern` | 58,000+ | 0.017ms | 0.025ms |
+| `user.has_permission()` | 358,000+ | 0.002ms | 0.002ms |
+| `token_cache.get()` (hit) | 190,000+ | 0.004ms | 0.008ms |
+| `token_cache.set()` | 108,000+ | 0.009ms | 0.020ms |
+
+**Full benchmark output:**
+
+```
+Permission Checks
+--------------------------------------------------------------------------------
+Benchmark                                          Ops/sec        Avg        P99
+--------------------------------------------------------------------------------
+check_permission (exists)                          421,574   0.0017ms   0.0033ms
+check_permission (not exists)                      348,375   0.0022ms   0.0029ms
+check_any_permission (3 perms)                     331,096   0.0019ms   0.0024ms
+check_all_permissions (3 perms)                    195,144   0.0044ms   0.0052ms
+check_permission_pattern (resource5:*)              58,265   0.0165ms   0.0247ms
+user.has_permission()                              358,789   0.0021ms   0.0020ms
+user.has_any_permission()                          539,614   0.0012ms   0.0018ms
+
+Cache Operations
+--------------------------------------------------------------------------------
+token_cache.get() (hit)                            190,002   0.0037ms   0.0082ms
+token_cache.get() (miss)                           200,691   0.0039ms   0.0056ms
+token_cache.set()                                  108,719   0.0085ms   0.0202ms
+```
 
 **Translation:** Auth won't be your bottleneck.
 
