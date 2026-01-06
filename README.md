@@ -1,4 +1,4 @@
-# 🔐 Ab0t Auth
+# Ab0t Auth
 
 ### Stop Building Auth. Start Building Features.
 
@@ -11,7 +11,7 @@
 
 ---
 
-## 🚀 Why Ab0t Auth?
+## Why Ab0t Auth?
 
 **Authentication is table stakes. But it's eating your roadmap.**
 
@@ -33,7 +33,7 @@ async def get_data(user = Depends(require_auth(auth))):
 
 ---
 
-## 💡 The Problem We Solve
+## The Problem We Solve
 
 | Without Ab0t Auth | With Ab0t Auth |
 |-------------------|----------------|
@@ -48,7 +48,7 @@ async def get_data(user = Depends(require_auth(auth))):
 
 ---
 
-## ⚡ Installation
+## Installation
 
 ### From GitHub (Latest)
 
@@ -71,12 +71,12 @@ pip install "ab0t-auth[dev]"  # Includes testing tools
 ### Verify Installation
 
 ```bash
-python -c "from ab0t_auth import AuthGuard; print('✅ Ready to ship!')"
+python -c "from ab0t_auth import AuthGuard; print('Ready to ship!')"
 ```
 
 ---
 
-## 🎯 Quick Start (5 Minutes to Protected API)
+## Quick Start (5 Minutes to Protected API)
 
 ### Step 1: Initialize
 
@@ -118,9 +118,9 @@ uvicorn main:app --reload
 
 ---
 
-## 🔥 Features That Make Teams Switch
+## Features That Make Teams Switch
 
-### 🎨 Three Integration Styles (Pick Your Favorite)
+### Three Integration Styles (Pick Your Favorite)
 
 **Dependencies** (Most Popular)
 ```python
@@ -142,7 +142,7 @@ async def admin_panel(request: Request, auth_user: AuthenticatedUser):
 app.add_middleware(AuthMiddleware, guard=auth, exclude_paths=["/health"])
 ```
 
-### 🔒 Permission System That Actually Works
+### Permission System That Actually Works
 
 ```python
 # Single permission
@@ -158,7 +158,7 @@ require_all_permissions(auth, "users:read", "users:write")
 require_permission_pattern(auth, "org:*:admin")
 ```
 
-### 🏢 Multi-Tenancy Built In
+### Multi-Tenancy Built In
 
 Ab0t is multi-tenant by design. Each user belongs to a tenant (company), with support for nested organizations.
 
@@ -205,14 +205,14 @@ Tenant (Company)
         └── Enterprise
 ```
 
-### ⚡ Blazing Fast (1000+ req/sec)
+### Blazing Fast (1000+ req/sec)
 
 - **Local JWT validation** - No auth service round-trip
 - **Intelligent caching** - Tokens, permissions, JWKS
 - **Async everything** - Non-blocking I/O throughout
 - **Connection pooling** - HTTP/2 with keepalive
 
-### 🛡️ Security You Can Trust
+### Security You Can Trust
 
 - RFC 7517/7519 compliant JWT validation
 - JWKS key rotation handled automatically
@@ -222,7 +222,7 @@ Tenant (Company)
 
 ---
 
-## ❓ FAQ
+## FAQ
 
 ### "Why not just use FastAPI's built-in security?"
 
@@ -280,9 +280,9 @@ Teams are running this in production right now. We have comprehensive tests, typ
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
-### ✅ v0.1.0 (Current)
+### v0.1.0 (Current)
 - [x] JWT validation with JWKS
 - [x] API key authentication
 - [x] Permission checking (client + server)
@@ -294,21 +294,21 @@ Teams are running this in production right now. We have comprehensive tests, typ
 - [x] Flask support
 - [x] Multi-tenancy with nested orgs
 
-### 🔜 v0.2.0 (Next)
+### v0.2.0 (Next)
 - [ ] OAuth2 flow helpers (Google, GitHub, etc.)
 - [ ] Session management utilities
 - [ ] Rate limiting integration
 - [ ] WebSocket authentication
 - [ ] Service account enhancements
 
-### 🔮 v0.3.0 (Future)
+### v0.3.0 (Future)
 - [ ] Admin dashboard integration
 - [ ] Audit logging to Ab0t
 - [ ] Custom claim validators
 - [ ] gRPC support
 - [ ] OpenTelemetry traces
 
-### 💭 Under Consideration
+### Under Consideration
 - GraphQL integration
 - Django adapter
 - Kubernetes sidecar mode
@@ -318,7 +318,7 @@ Teams are running this in production right now. We have comprehensive tests, typ
 
 ---
 
-## 📊 Performance
+## Performance
 
 Benchmarked on a standard 4-core VM:
 
@@ -333,17 +333,17 @@ Benchmarked on a standard 4-core VM:
 
 ---
 
-## 🤝 Support & Community
+## Support & Community
 
-- 📖 **Documentation:** [docs.ab0t.com/auth-wrapper](https://docs.ab0t.com/auth-wrapper)
-- 💬 **Discord:** [Join our community](https://discord.gg/ab0t)
-- 🐛 **Issues:** [GitHub Issues](https://github.com/ab0t-com/auth_wrapper/issues)
-- 💡 **Feature Requests:** [GitHub Discussions](https://github.com/ab0t-com/auth_wrapper/discussions)
-- 📧 **Enterprise:** enterprise@ab0t.com
+- **Documentation:** [docs.ab0t.com/auth-wrapper](https://docs.ab0t.com/auth-wrapper)
+- **Discord:** [Join our community](https://discord.gg/ab0t)
+- **Issues:** [GitHub Issues](https://github.com/ab0t-com/auth_wrapper/issues)
+- **Feature Requests:** [GitHub Discussions](https://github.com/ab0t-com/auth_wrapper/discussions)
+- **Enterprise:** enterprise@ab0t.com
 
 ---
 
-## 🏢 Trusted By
+## Trusted By
 
 > *"We cut our auth implementation from 3 weeks to 2 hours. The permission system alone saved us months of maintenance."*
 > — **Senior Engineer, Series B Startup**
@@ -356,13 +356,13 @@ Benchmarked on a standard 4-core VM:
 
 ---
 
-## 📜 License
+## License
 
 MIT License - Use it, modify it, ship it. See [LICENSE](LICENSE) for details.
 
 ---
 
-## 🚀 Get Started Now
+## Get Started Now
 
 ```bash
 pip install git+https://github.com/ab0t-com/auth_wrapper.git
@@ -381,7 +381,7 @@ auth = AuthGuard(auth_url="https://auth.service.ab0t.com")
 <p align="center">
   <b>Stop building auth. Start building the future.</b>
   <br><br>
-  <a href="https://github.com/ab0t-com/auth_wrapper">⭐ Star us on GitHub</a> •
-  <a href="https://docs.ab0t.com/auth-wrapper">📖 Read the Docs</a> •
-  <a href="https://discord.gg/ab0t">💬 Join Discord</a>
+  <a href="https://github.com/ab0t-com/auth_wrapper">Star us on GitHub</a> •
+  <a href="https://docs.ab0t.com/auth-wrapper">Read the Docs</a> •
+  <a href="https://discord.gg/ab0t">Join Discord</a>
 </p>
