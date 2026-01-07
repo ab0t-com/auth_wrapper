@@ -284,6 +284,63 @@ Teams are running this in production right now. We have comprehensive tests, typ
 
 ---
 
+## Development & Testing
+
+### Auth Bypass (Testing Only)
+
+For local development and testing, you can bypass authentication entirely. This feature uses a **defense-in-depth** approach requiring **TWO** environment variables to activate:
+
+```bash
+# BOTH must be set to "true" to enable bypass
+export AB0T_AUTH_DEBUG=true
+export AB0T_AUTH_BYPASS=true
+```
+
+**Optional configuration:**
+
+```bash
+# Customize the bypass user
+export AB0T_AUTH_BYPASS_USER_ID=dev_user
+export AB0T_AUTH_BYPASS_EMAIL=dev@localhost
+export AB0T_AUTH_BYPASS_PERMISSIONS=users:read,users:write,admin:access
+export AB0T_AUTH_BYPASS_ROLES=admin,developer
+export AB0T_AUTH_BYPASS_ORG_ID=test_org
+```
+
+**What happens when bypass is enabled:**
+
+1. All authentication checks return immediately with a synthetic user
+2. A **WARNING** is logged on every request (makes it obvious in logs)
+3. The user has `AuthMethod.BYPASS` and `TokenType.NONE` for identification
+4. Permission checks still work based on configured permissions/roles
+
+**Example usage:**
+
+```bash
+# Start your app with bypass enabled
+AB0T_AUTH_DEBUG=true AB0T_AUTH_BYPASS=true uvicorn app:app --reload
+```
+
+```python
+# All protected routes now authenticate as bypass user
+@app.get("/protected")
+async def protected(user: AuthenticatedUser = Depends(require_auth(auth))):
+    print(user.user_id)       # "bypass_user" (or configured value)
+    print(user.auth_method)   # AuthMethod.BYPASS
+    print(user.token_type)    # TokenType.NONE
+```
+
+**Safety features:**
+
+- Requires TWO env vars (defense-in-depth prevents accidental production use)
+- Logs WARNING on every bypassed request
+- Only `"true"` (case-insensitive) activates bypass - not `"1"`, `"yes"`, etc.
+- Bypass user still respects permission checks (must configure permissions you need)
+
+**Never use in production.** The dual-flag requirement makes accidental production use unlikely, but always verify your deployment configuration.
+
+---
+
 ## Roadmap
 
 ### v0.1.0 (Current)
