@@ -1,0 +1,129 @@
+Implementation Summary: Auth Bypass Feature
+============================================
+
+Date: 2026-01-07
+Branch: feature/auth-bypass-testing
+GitHub Issue: #4
+
+Files Modified
+--------------
+
+1. src/ab0t_auth/core.py
+   - Added TokenType.NONE enum value (line 26)
+   - Added AuthMethod.BYPASS enum value (line 35)
+
+2. src/ab0t_auth/config.py
+   - Added BypassConfig dataclass (lines 26-40)
+   - Added load_bypass_config() function (lines 43-73)
+   - Imports: os, dataclass, field
+
+3. src/ab0t_auth/guard.py
+   - Import BypassConfig and load_bypass_config (line 27)
+   - Added self._bypass_config in __init__ (line 136)
+   - Added _check_auth_bypass() method (lines 232-262)
+   - Modified authenticate() to check bypass first (lines 275-279)
+
+4. pyproject.toml
+   - Changed httpx>=0.25.0 to httpx[http2]>=0.25.0 (line 41)
+   - Adds HTTP/2 support required by client.py
+
+Files Created
+-------------
+
+1. tests/test_bypass.py (23 tests)
+   - TestBypassConfig: 3 tests
+   - TestLoadBypassConfig: 12 tests
+   - TestAuthGuardBypass: 6 tests
+   - TestBypassEnums: 2 tests
+
+Implementation Details
+----------------------
+
+Defense-in-Depth Bypass Mechanism:
+
+1. Requires TWO environment variables to activate:
+   - AB0T_AUTH_BYPASS=true
+   - AB0T_AUTH_DEBUG=true
+
+2. Optional configuration via env vars:
+   - AB0T_AUTH_BYPASS_USER_ID (default: "bypass_user")
+   - AB0T_AUTH_BYPASS_EMAIL (default: "bypass@test.local")
+   - AB0T_AUTH_BYPASS_PERMISSIONS (comma-separated)
+   - AB0T_AUTH_BYPASS_ROLES (comma-separated)
+   - AB0T_AUTH_BYPASS_ORG_ID (optional)
+
+3. Safety Features:
+   - WARNING logged on every bypassed request
+   - Injects real AuthenticatedUser object
+   - Uses AuthMethod.BYPASS for clear identification
+   - Uses TokenType.NONE to indicate no token
+
+Code Flow
+---------
+
+1. AuthGuard.__init__() calls load_bypass_config()
+2. authenticate() checks _check_auth_bypass() first
+3. If bypass enabled:
+   - Log WARNING with user details
+   - Return AuthResult.ok(bypass_user)
+   - Skip all JWT/API key authentication
+4. If bypass disabled:
+   - Return None, continue normal auth flow
+
+Test Results
+------------
+
+Command: pytest tests/ -v --tb=short
+Result: 231 passed in 0.49s
+
+Breakdown:
+- test_bypass.py: 23 passed
+- test_core.py: 18 passed
+- test_flask.py: 48 passed
+- test_jwt.py: 30 passed
+- test_logging.py: 61 passed
+- test_permissions.py: 26 passed
+- test_tenant.py: 57 passed
+
+Usage Example
+-------------
+
+# Enable bypass for local development
+export AB0T_AUTH_DEBUG=true
+export AB0T_AUTH_BYPASS=true
+export AB0T_AUTH_BYPASS_USER_ID=dev_user
+export AB0T_AUTH_BYPASS_PERMISSIONS=users:read,users:write
+uvicorn app:app --reload
+
+# All requests will be authenticated as dev_user with specified permissions
+# WARNING will be logged on every request
+
+Session Commands
+----------------
+
+Read src/ab0t_auth/core.py
+Intent: Understand existing enum structure
+
+Read src/ab0t_auth/config.py
+Intent: Understand configuration pattern
+
+Read src/ab0t_auth/guard.py
+Intent: Understand authenticate flow
+
+Edit src/ab0t_auth/core.py
+Intent: Add TokenType.NONE and AuthMethod.BYPASS
+
+Edit src/ab0t_auth/config.py
+Intent: Add BypassConfig and load_bypass_config
+
+Edit src/ab0t_auth/guard.py
+Intent: Add _check_auth_bypass and integrate into authenticate
+
+Edit pyproject.toml
+Intent: Add httpx[http2] dependency
+
+Write tests/test_bypass.py
+Intent: Create comprehensive bypass tests
+
+pytest tests/ -v --tb=short
+Intent: Verify all 231 tests pass

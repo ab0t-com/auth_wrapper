@@ -24,7 +24,7 @@ from ab0t_auth.client import (
     validate_api_key,
     validate_token as validate_token_remote,
 )
-from ab0t_auth.config import AuthSettings, create_config, settings_to_config
+from ab0t_auth.config import AuthSettings, BypassConfig, create_config, load_bypass_config, settings_to_config
 from ab0t_auth.core import (
     AuthConfig,
     AuthContext,
@@ -132,6 +132,9 @@ class AuthGuard:
             self._config
         )
 
+        # Load bypass configuration (for testing/development)
+        self._bypass_config = load_bypass_config()
+
         # Logging and metrics
         self._logger = get_logger("ab0t_auth.guard")
         self._metrics = AuthMetrics()
@@ -226,6 +229,38 @@ class AuthGuard:
     # Core Authentication Methods
     # =========================================================================
 
+    def _check_auth_bypass(self) -> AuthResult | None:
+        """
+        Check if auth bypass is enabled and return bypass user.
+
+        Returns AuthResult if bypass is active, None otherwise.
+        Requires BOTH AB0T_AUTH_BYPASS=true AND AB0T_AUTH_DEBUG=true.
+        """
+        if not self._bypass_config.enabled:
+            return None
+
+        # Log WARNING on every bypass - makes it obvious in logs
+        self._logger.warning(
+            "AUTH BYPASS ACTIVE",
+            event_type="auth_bypass",
+            user_id=self._bypass_config.user_id,
+            permissions=self._bypass_config.permissions,
+            roles=self._bypass_config.roles,
+            warning="Not for production use",
+        )
+
+        user = AuthenticatedUser(
+            user_id=self._bypass_config.user_id,
+            email=self._bypass_config.email,
+            org_id=self._bypass_config.org_id,
+            permissions=self._bypass_config.permissions,
+            roles=self._bypass_config.roles,
+            auth_method=AuthMethod.BYPASS,
+            token_type=TokenType.NONE,
+        )
+
+        return AuthResult.ok(user)
+
     async def authenticate(
         self,
         authorization: str | None = None,
@@ -237,6 +272,12 @@ class AuthGuard:
         Main authentication entry point.
         Returns AuthResult - check .success before using .user.
         """
+        # Check for bypass first (testing/development only)
+        bypass_result = self._check_auth_bypass()
+        if bypass_result:
+            self._metrics.record_auth_attempt(True)
+            return bypass_result
+
         if not self._initialized:
             await self.initialize()
 
