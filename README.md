@@ -4,6 +4,10 @@
 
 **The fastest way to add enterprise-grade authentication to your FastAPI apps.**
 
+```bash
+pip install git+https://github.com/ab0t-com/auth_wrapper.git
+```
+
 [![PyPI](https://img.shields.io/pypi/v/ab0t-auth)](https://pypi.org/project/ab0t-auth/)
 [![Python](https://img.shields.io/pypi/pyversions/ab0t-auth)](https://pypi.org/project/ab0t-auth/)
 [![License](https://img.shields.io/github/license/ab0t-com/auth_wrapper)](LICENSE)

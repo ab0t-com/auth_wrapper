@@ -166,6 +166,18 @@ class TestLogAuthAttempt:
         assert call_kwargs["ip_address"] == "192.168.1.1"
         assert call_kwargs["user_agent"] == "TestClient/1.0"
 
+    def test_extra_event_key_filtered(self, mock_logger: MagicMock) -> None:
+        """Test that 'event' in extra kwargs is filtered out to prevent conflict."""
+        log_auth_attempt(
+            mock_logger,
+            method="jwt",
+            success=True,
+            event="should_be_filtered",
+        )
+        call_kwargs = mock_logger.info.call_args[1]
+        assert "event" not in call_kwargs
+        assert "event_type" in call_kwargs
+
 
 class TestLogPermissionCheck:
     """Tests for log_permission_check function."""
@@ -220,6 +232,19 @@ class TestLogPermissionCheck:
         call_kwargs = mock_logger.debug.call_args[1]
         assert call_kwargs["duration_ms"] == 5.79
 
+    def test_extra_event_key_filtered(self, mock_logger: MagicMock) -> None:
+        """Test that 'event' in extra kwargs is filtered out to prevent conflict."""
+        log_permission_check(
+            mock_logger,
+            permission="users:read",
+            allowed=True,
+            user_id="user_123",
+            event="should_be_filtered",
+        )
+        call_kwargs = mock_logger.debug.call_args[1]
+        assert "event" not in call_kwargs
+        assert "event_type" in call_kwargs
+
 
 class TestLogTokenValidation:
     """Tests for log_token_validation function."""
@@ -268,6 +293,17 @@ class TestLogTokenValidation:
         )
         call_kwargs = mock_logger.debug.call_args[1]
         assert call_kwargs["cached"] is True
+
+    def test_extra_event_key_filtered(self, mock_logger: MagicMock) -> None:
+        """Test that 'event' in extra kwargs is filtered out to prevent conflict."""
+        log_token_validation(
+            mock_logger,
+            valid=True,
+            event="should_be_filtered",
+        )
+        call_kwargs = mock_logger.debug.call_args[1]
+        assert "event" not in call_kwargs
+        assert "event_type" in call_kwargs
 
 
 class TestLogCacheOperation:
@@ -333,6 +369,18 @@ class TestLogCacheOperation:
         call_kwargs = mock_logger.debug.call_args[1]
         assert call_kwargs["key"] == short_key
 
+    def test_extra_event_key_filtered(self, mock_logger: MagicMock) -> None:
+        """Test that 'event' in extra kwargs is filtered out to prevent conflict."""
+        log_cache_operation(
+            mock_logger,
+            operation="get",
+            cache_type="token",
+            event="should_be_filtered",
+        )
+        call_kwargs = mock_logger.debug.call_args[1]
+        assert "event" not in call_kwargs
+        assert "event_type" in call_kwargs
+
 
 class TestLogError:
     """Tests for log_error function."""
@@ -375,6 +423,14 @@ class TestLogError:
         log_error(mock_logger, error)
         call_kwargs = mock_logger.error.call_args[1]
         assert call_kwargs["exc_info"] is error
+
+    def test_extra_event_key_filtered(self, mock_logger: MagicMock) -> None:
+        """Test that 'event' in extra kwargs is filtered out to prevent conflict."""
+        error = ValueError("Test error")
+        log_error(mock_logger, error, event="should_be_filtered")
+        call_kwargs = mock_logger.error.call_args[1]
+        assert "event" not in call_kwargs
+        assert "event_type" in call_kwargs
 
 
 # =============================================================================
