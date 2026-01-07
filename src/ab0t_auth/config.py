@@ -7,6 +7,8 @@ Provides pure functions for configuration creation and validation.
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
@@ -14,6 +16,61 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ab0t_auth.core import AuthConfig
+
+
+# =============================================================================
+# Bypass Configuration (for testing/development)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class BypassConfig:
+    """
+    Configuration for auth bypass (testing/development only).
+
+    Requires BOTH AB0T_AUTH_BYPASS=true AND AB0T_AUTH_DEBUG=true to activate.
+    This defense-in-depth approach prevents accidental production use.
+    """
+
+    enabled: bool = False
+    user_id: str = "bypass_user"
+    email: str = "bypass@test.local"
+    permissions: tuple[str, ...] = field(default_factory=tuple)
+    roles: tuple[str, ...] = field(default_factory=tuple)
+    org_id: str | None = None
+
+
+def load_bypass_config() -> BypassConfig:
+    """
+    Load bypass configuration from environment variables.
+
+    Requires BOTH conditions to enable bypass:
+    - AB0T_AUTH_BYPASS=true
+    - AB0T_AUTH_DEBUG=true
+
+    This defense-in-depth approach prevents accidental production use.
+    """
+    bypass = os.getenv("AB0T_AUTH_BYPASS", "").lower() == "true"
+    debug = os.getenv("AB0T_AUTH_DEBUG", "").lower() == "true"
+
+    if not (bypass and debug):
+        return BypassConfig(enabled=False)
+
+    # Parse permissions and roles from comma-separated strings
+    permissions_str = os.getenv("AB0T_AUTH_BYPASS_PERMISSIONS", "")
+    permissions = tuple(p.strip() for p in permissions_str.split(",") if p.strip())
+
+    roles_str = os.getenv("AB0T_AUTH_BYPASS_ROLES", "")
+    roles = tuple(r.strip() for r in roles_str.split(",") if r.strip())
+
+    return BypassConfig(
+        enabled=True,
+        user_id=os.getenv("AB0T_AUTH_BYPASS_USER_ID", "bypass_user"),
+        email=os.getenv("AB0T_AUTH_BYPASS_EMAIL", "bypass@test.local"),
+        permissions=permissions,
+        roles=roles,
+        org_id=os.getenv("AB0T_AUTH_BYPASS_ORG_ID"),
+    )
 
 
 class AuthSettings(BaseSettings):

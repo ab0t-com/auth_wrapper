@@ -23,6 +23,7 @@ class TokenType(str, Enum):
 
     BEARER = "Bearer"
     API_KEY = "ApiKey"
+    NONE = "None"  # Used for bypass authentication
 
 
 class AuthMethod(str, Enum):
@@ -31,6 +32,7 @@ class AuthMethod(str, Enum):
     JWT = "jwt"
     API_KEY = "api_key"
     OAUTH = "oauth"
+    BYPASS = "bypass"  # Used for testing/development bypass
 
 
 # =============================================================================
