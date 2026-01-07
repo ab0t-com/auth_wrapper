@@ -114,7 +114,7 @@ def log_auth_attempt(
     Logs at INFO level for success, WARNING for failure.
     """
     event_data = {
-        "event": "auth_attempt",
+        "event_type": "auth_attempt",
         "method": method,
         "success": success,
     }
@@ -125,6 +125,7 @@ def log_auth_attempt(
     if error:
         event_data["error"] = error
     event_data.update(extra)
+    event_data.pop("event", None)
 
     if success:
         logger.info("Authentication successful", **event_data)
@@ -148,7 +149,7 @@ def log_permission_check(
     Logs at DEBUG level for allowed, INFO for denied.
     """
     event_data = {
-        "event": "permission_check",
+        "event_type": "permission_check",
         "permission": permission,
         "allowed": allowed,
         "user_id": user_id,
@@ -157,6 +158,7 @@ def log_permission_check(
     if duration_ms is not None:
         event_data["duration_ms"] = round(duration_ms, 2)
     event_data.update(extra)
+    event_data.pop("event", None)
 
     if allowed:
         logger.debug("Permission granted", **event_data)
@@ -181,7 +183,7 @@ def log_token_validation(
     Logs at DEBUG level for valid tokens, WARNING for invalid.
     """
     event_data = {
-        "event": "token_validation",
+        "event_type": "token_validation",
         "valid": valid,
         "method": method,
         "cached": cached,
@@ -193,6 +195,7 @@ def log_token_validation(
     if error:
         event_data["error"] = error
     event_data.update(extra)
+    event_data.pop("event", None)
 
     if valid:
         logger.debug("Token validated", **event_data)
@@ -215,7 +218,7 @@ def log_cache_operation(
     Logs at DEBUG level.
     """
     event_data = {
-        "event": "cache_operation",
+        "event_type": "cache_operation",
         "operation": operation,
         "cache_type": cache_type,
     }
@@ -224,6 +227,7 @@ def log_cache_operation(
     if key:
         event_data["key"] = key[:16] + "..." if len(key) > 16 else key
     event_data.update(extra)
+    event_data.pop("event", None)
 
     logger.debug("Cache operation", **event_data)
 
@@ -241,13 +245,14 @@ def log_error(
     Logs at ERROR level with exception info.
     """
     event_data = {
-        "event": "error",
+        "event_type": "error",
         "error_type": type(error).__name__,
         "error_message": str(error),
     }
     if context:
         event_data["context"] = context
     event_data.update(extra)
+    event_data.pop("event", None)
 
     logger.error("Error occurred", exc_info=error, **event_data)
 

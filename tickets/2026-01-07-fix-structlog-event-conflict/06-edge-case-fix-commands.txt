@@ -1,0 +1,53 @@
+Edge Case Fix Session Commands
+===============================
+
+Date: 2026-01-07
+Context: Addressing reviewer feedback on **extra parameter vulnerability
+
+Commands Executed
+-----------------
+
+Read src/ab0t_auth/logging.py (offset 115, limit 20)
+Intent: Locate event_data.update(extra) in log_auth_attempt
+
+Edit src/ab0t_auth/logging.py - log_auth_attempt
+Intent: Add event_data.pop("event", None) after update(extra) at line 127
+
+Edit src/ab0t_auth/logging.py - log_permission_check
+Intent: Add event_data.pop("event", None) after update(extra) at line 160
+
+Edit src/ab0t_auth/logging.py - log_token_validation
+Intent: Add event_data.pop("event", None) after update(extra) at line 197
+
+Edit src/ab0t_auth/logging.py - log_cache_operation
+Intent: Add event_data.pop("event", None) after update(extra) at line 229
+
+Edit src/ab0t_auth/logging.py - log_error
+Intent: Add event_data.pop("event", None) after update(extra) at line 254
+
+Edit tests/test_logging.py - TestLogAuthAttempt
+Intent: Add test_extra_event_key_filtered test case
+
+Edit tests/test_logging.py - TestLogPermissionCheck
+Intent: Add test_extra_event_key_filtered test case
+
+Edit tests/test_logging.py - TestLogTokenValidation
+Intent: Add test_extra_event_key_filtered test case
+
+Edit tests/test_logging.py - TestLogCacheOperation
+Intent: Add test_extra_event_key_filtered test case
+
+Edit tests/test_logging.py - TestLogError
+Intent: Add test_extra_event_key_filtered test case
+
+.venv/bin/python -m pytest tests/ -v --tb=short
+Intent: Run full test suite to verify all 208 tests pass
+
+git add -A && git commit -m "Filter event key from extra kwargs..."
+Intent: Commit the edge case fix and new tests
+
+Summary
+-------
+- 5 code changes: Added defensive pop("event", None) in each logging function
+- 5 new tests: Verify extra event key is filtered in each function
+- Test count: 203 -> 208 (5 new tests added)
