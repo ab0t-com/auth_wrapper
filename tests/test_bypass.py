@@ -749,3 +749,471 @@ class TestBypassGuardProperties:
             from ab0t_auth.config import load_bypass_config
             guard._bypass_config = load_bypass_config()
             assert guard._bypass_config.user_id == "init_user"
+
+
+# =============================================================================
+# Security Tests - Default OFF Verification
+# =============================================================================
+
+
+class TestBypassDefaultOff:
+    """Verify bypass is disabled by default - critical security tests."""
+
+    def test_default_config_is_disabled(self) -> None:
+        """Test BypassConfig() defaults to disabled."""
+        config = BypassConfig()
+        assert config.enabled is False
+
+    def test_empty_environment_disables_bypass(self) -> None:
+        """Test completely empty environment disables bypass."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_bypass_config()
+            assert config.enabled is False
+
+    def test_fresh_guard_has_bypass_disabled(self) -> None:
+        """Test new AuthGuard has bypass disabled by default."""
+        with patch.dict(os.environ, {}, clear=True):
+            guard = AuthGuard(auth_url="https://auth.test.com")
+            guard._bypass_config = load_bypass_config()
+            assert guard._bypass_config.enabled is False
+
+    @pytest.mark.asyncio
+    async def test_authenticate_requires_credentials_by_default(self) -> None:
+        """Test authenticate fails without credentials when bypass off."""
+        with patch.dict(os.environ, {}, clear=True):
+            guard = AuthGuard(auth_url="https://auth.test.com")
+            guard._bypass_config = load_bypass_config()
+            result = await guard.authenticate()
+            assert result.success is False
+            assert result.error_code == "NO_CREDENTIALS"
+
+
+# =============================================================================
+# Security Tests - Hacker-Style Bypass Attempts
+# =============================================================================
+
+
+class TestBypassSecurityAttacks:
+    """
+    Adversarial tests attempting to bypass auth through clever tricks.
+
+    These tests think like an attacker with deep knowledge of:
+    - String parsing edge cases
+    - Type confusion attacks
+    - Injection techniques
+    - Unicode tricks
+    - Environment variable manipulation
+    """
+
+    # -------------------------------------------------------------------------
+    # String Parsing Attacks
+    # -------------------------------------------------------------------------
+
+    def test_whitespace_padding_attack(self) -> None:
+        """Attack: Add whitespace around 'true' to bypass parsing."""
+        attack_values = [
+            " true",      # Leading space
+            "true ",      # Trailing space
+            " true ",     # Both
+            "\ttrue",     # Tab
+            "true\n",     # Newline
+            "\ntrue\n",   # Newlines
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                assert config.enabled is False, f"Bypass enabled with whitespace attack: {repr(attack)}"
+
+    def test_case_mixed_attack(self) -> None:
+        """Attack: Try unusual case combinations."""
+        attack_values = [
+            "tRuE",
+            "truE",
+            "TRUe",
+            "trUE",
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                # These SHOULD work (case insensitive) - verify it's intentional
+                assert config.enabled is True, f"Case insensitive should work: {attack}"
+
+    def test_boolean_like_values_attack(self) -> None:
+        """Attack: Try other boolean-like values that might be truthy."""
+        attack_values = [
+            "yes",
+            "Yes",
+            "YES",
+            "y",
+            "Y",
+            "on",
+            "ON",
+            "enabled",
+            "ENABLED",
+            "1",
+            "1.0",
+            "-1",
+            "ok",
+            "OK",
+            "positive",
+            "affirmative",
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                assert config.enabled is False, f"Bypass enabled with boolean-like value: {attack}"
+
+    def test_partial_match_attack(self) -> None:
+        """Attack: Try strings containing 'true' but not exactly 'true'."""
+        attack_values = [
+            "true1",
+            "1true",
+            "truetrue",
+            "true true",
+            "nottrue",
+            "truefalse",
+            "true,true",
+            "true;true",
+            "[true]",
+            "{true}",
+            '"true"',
+            "'true'",
+            "true==true",
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                assert config.enabled is False, f"Bypass enabled with partial match: {attack}"
+
+    # -------------------------------------------------------------------------
+    # Injection Attacks
+    # -------------------------------------------------------------------------
+
+    def test_null_byte_injection_attack(self) -> None:
+        """Attack: Null byte injection to truncate string comparison.
+
+        Result: Python/OS prevents null bytes in environment variables.
+        This is a security feature - the attack vector is blocked at OS level.
+        """
+        attack_values = [
+            "true\x00false",
+            "true\x00",
+            "\x00true",
+            "true\x00anything",
+        ]
+        for attack in attack_values:
+            # Python's os.environ raises ValueError for null bytes
+            # This is security enforced at OS/Python level - attack blocked
+            with pytest.raises(ValueError, match="embedded null byte"):
+                with patch.dict(os.environ, {
+                    "AB0T_AUTH_BYPASS": attack,
+                    "AB0T_AUTH_DEBUG": attack,
+                }, clear=True):
+                    pass  # Should never reach here
+
+    def test_newline_injection_attack(self) -> None:
+        """Attack: Newline injection to confuse parsers."""
+        attack_values = [
+            "true\nAB0T_AUTH_DEBUG=true",
+            "false\ntrue",
+            "true\r\nfalse",
+            "true\rfalse",
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": "true",
+            }, clear=True):
+                config = load_bypass_config()
+                assert config.enabled is False, f"Bypass enabled with newline injection: {repr(attack)}"
+
+    def test_shell_injection_in_value(self) -> None:
+        """Attack: Shell metacharacters in env var value."""
+        attack_values = [
+            "true; echo pwned",
+            "true && echo pwned",
+            "true | cat /etc/passwd",
+            "$(echo true)",
+            "`echo true`",
+            "true; rm -rf /",
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                assert config.enabled is False, f"Bypass enabled with shell injection: {attack}"
+
+    # -------------------------------------------------------------------------
+    # Unicode Attacks
+    # -------------------------------------------------------------------------
+
+    def test_unicode_lookalike_attack(self) -> None:
+        """Attack: Unicode characters that look like 'true'."""
+        attack_values = [
+            "ᴛʀᴜᴇ",         # Small caps
+            "тrue",          # Cyrillic т
+            "truе",          # Cyrillic е
+            "ｔｒｕｅ",      # Fullwidth
+            "t\u200brue",    # Zero-width space
+            "tr\u00adue",    # Soft hyphen
+            "true\ufeff",    # BOM
+            "\ufefftrue",    # BOM prefix
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                assert config.enabled is False, f"Bypass enabled with unicode lookalike: {repr(attack)}"
+
+    def test_unicode_normalization_attack(self) -> None:
+        """Attack: Unicode strings that might normalize to 'true'."""
+        import unicodedata
+        attack_values = [
+            unicodedata.normalize("NFD", "true"),  # Decomposed
+            unicodedata.normalize("NFKD", "true"), # Compatibility decomposed
+            "true\u0300",  # With combining character
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                # NFD/NFKD of "true" is still "true", so these should work
+                # This test documents the behavior
+                if attack == "true":
+                    assert config.enabled is True
+                else:
+                    assert config.enabled is False, f"Unexpected with: {repr(attack)}"
+
+    # -------------------------------------------------------------------------
+    # Type Confusion Attacks
+    # -------------------------------------------------------------------------
+
+    def test_json_boolean_attack(self) -> None:
+        """Attack: JSON-style boolean representations."""
+        attack_values = [
+            "True",   # Python repr - actually this should work (case insensitive)
+            "False",
+            "null",
+            "None",
+            "undefined",
+            "NaN",
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                if attack.lower() == "true":
+                    assert config.enabled is True
+                else:
+                    assert config.enabled is False, f"Bypass enabled with: {attack}"
+
+    def test_numeric_truthy_attack(self) -> None:
+        """Attack: Numeric values that might be truthy."""
+        attack_values = [
+            "0",
+            "1",
+            "-1",
+            "0.0",
+            "1.0",
+            "0x1",
+            "0b1",
+            "0o1",
+            "inf",
+            "-inf",
+            "1e10",
+        ]
+        for attack in attack_values:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": attack,
+                "AB0T_AUTH_DEBUG": attack,
+            }, clear=True):
+                config = load_bypass_config()
+                assert config.enabled is False, f"Bypass enabled with numeric: {attack}"
+
+    # -------------------------------------------------------------------------
+    # Single Flag Attacks (Defense-in-Depth)
+    # -------------------------------------------------------------------------
+
+    def test_only_bypass_many_values(self) -> None:
+        """Attack: Try to enable bypass with only AB0T_AUTH_BYPASS."""
+        with patch.dict(os.environ, {
+            "AB0T_AUTH_BYPASS": "true",
+            # Intentionally NOT setting AB0T_AUTH_DEBUG
+        }, clear=True):
+            config = load_bypass_config()
+            assert config.enabled is False, "Defense-in-depth failed: only BYPASS set"
+
+    def test_only_debug_many_values(self) -> None:
+        """Attack: Try to enable bypass with only AB0T_AUTH_DEBUG."""
+        with patch.dict(os.environ, {
+            "AB0T_AUTH_DEBUG": "true",
+            # Intentionally NOT setting AB0T_AUTH_BYPASS
+        }, clear=True):
+            config = load_bypass_config()
+            assert config.enabled is False, "Defense-in-depth failed: only DEBUG set"
+
+    def test_one_true_one_truthy(self) -> None:
+        """Attack: One correct flag, one truthy-but-wrong value."""
+        attack_combos = [
+            ("true", "1"),
+            ("true", "yes"),
+            ("1", "true"),
+            ("yes", "true"),
+            ("true", "TRUE "),  # with space
+        ]
+        for bypass_val, debug_val in attack_combos:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": bypass_val,
+                "AB0T_AUTH_DEBUG": debug_val,
+            }, clear=True):
+                config = load_bypass_config()
+                # Only "true" (case insensitive, no whitespace) should work
+                bypass_ok = bypass_val.lower() == "true"
+                debug_ok = debug_val.lower() == "true"
+                expected = bypass_ok and debug_ok
+                assert config.enabled is expected, f"Unexpected result for ({bypass_val}, {debug_val})"
+
+    # -------------------------------------------------------------------------
+    # Runtime Manipulation Attacks
+    # -------------------------------------------------------------------------
+
+    def test_frozen_config_cannot_be_modified(self) -> None:
+        """Attack: Try to modify bypass config after creation."""
+        config = BypassConfig(enabled=False)
+
+        with pytest.raises(AttributeError):
+            config.enabled = True  # type: ignore
+
+        with pytest.raises(AttributeError):
+            config.user_id = "hacker"  # type: ignore
+
+        with pytest.raises(AttributeError):
+            config.permissions = ("admin:*",)  # type: ignore
+
+    def test_guard_bypass_config_replacement_attack(self) -> None:
+        """Attack: Try to replace guard's bypass config at runtime."""
+        with patch.dict(os.environ, {}, clear=True):
+            guard = AuthGuard(auth_url="https://auth.test.com")
+            guard._bypass_config = load_bypass_config()
+
+            # Verify initially disabled
+            assert guard._bypass_config.enabled is False
+
+            # Attacker tries to replace config
+            malicious_config = BypassConfig(
+                enabled=True,
+                user_id="hacker",
+                permissions=("admin:*", "superuser:*"),
+            )
+            guard._bypass_config = malicious_config
+
+            # This DOES work - but requires code access
+            # Document that internal state can be modified if attacker has code execution
+            assert guard._bypass_config.enabled is True
+            # This is expected - if attacker can modify code, they can do anything
+
+    @pytest.mark.asyncio
+    async def test_env_change_after_init_attack(self) -> None:
+        """Attack: Change environment after guard initialization."""
+        with patch.dict(os.environ, {}, clear=True):
+            guard = AuthGuard(auth_url="https://auth.test.com")
+            guard._bypass_config = load_bypass_config()
+
+            # Verify disabled
+            assert guard._bypass_config.enabled is False
+
+            # Attacker changes env vars after init
+            os.environ["AB0T_AUTH_BYPASS"] = "true"
+            os.environ["AB0T_AUTH_DEBUG"] = "true"
+
+            # Config was loaded at init time, should still be disabled
+            result = await guard.authenticate()
+            assert result.success is False, "Guard should use config from init time"
+
+    # -------------------------------------------------------------------------
+    # Empty and Boundary Value Attacks
+    # -------------------------------------------------------------------------
+
+    def test_empty_string_attack(self) -> None:
+        """Attack: Empty strings for flags."""
+        with patch.dict(os.environ, {
+            "AB0T_AUTH_BYPASS": "",
+            "AB0T_AUTH_DEBUG": "",
+        }, clear=True):
+            config = load_bypass_config()
+            assert config.enabled is False
+
+    def test_only_spaces_attack(self) -> None:
+        """Attack: Strings of only whitespace."""
+        with patch.dict(os.environ, {
+            "AB0T_AUTH_BYPASS": "   ",
+            "AB0T_AUTH_DEBUG": "   ",
+        }, clear=True):
+            config = load_bypass_config()
+            assert config.enabled is False
+
+    def test_very_long_string_attack(self) -> None:
+        """Attack: Very long string starting with 'true'."""
+        long_attack = "true" + "x" * 10000
+        with patch.dict(os.environ, {
+            "AB0T_AUTH_BYPASS": long_attack,
+            "AB0T_AUTH_DEBUG": long_attack,
+        }, clear=True):
+            config = load_bypass_config()
+            assert config.enabled is False
+
+    # -------------------------------------------------------------------------
+    # Permission Escalation Attacks
+    # -------------------------------------------------------------------------
+
+    def test_wildcard_permission_injection(self) -> None:
+        """Attack: Inject wildcard permissions via env var."""
+        with patch.dict(os.environ, {
+            "AB0T_AUTH_BYPASS": "true",
+            "AB0T_AUTH_DEBUG": "true",
+            "AB0T_AUTH_BYPASS_PERMISSIONS": "*,admin:*,**,root:*",
+        }, clear=True):
+            config = load_bypass_config()
+            # Wildcards are stored but permission system must handle them safely
+            assert "*" in config.permissions
+            # This documents that permission validation is separate concern
+
+    def test_special_chars_in_user_id(self) -> None:
+        """Attack: Special characters in user_id for injection."""
+        attack_ids = [
+            "../../../etc/passwd",
+            "admin' OR '1'='1",
+            "admin; DROP TABLE users;--",
+            "<script>alert('xss')</script>",
+            "{{constructor.constructor('return this')()}}",
+        ]
+        for attack_id in attack_ids:
+            with patch.dict(os.environ, {
+                "AB0T_AUTH_BYPASS": "true",
+                "AB0T_AUTH_DEBUG": "true",
+                "AB0T_AUTH_BYPASS_USER_ID": attack_id,
+            }, clear=True):
+                config = load_bypass_config()
+                # Value is stored as-is - downstream code must sanitize
+                assert config.user_id == attack_id
+                # This documents the responsibility boundary
