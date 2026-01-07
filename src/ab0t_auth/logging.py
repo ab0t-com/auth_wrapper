@@ -114,7 +114,7 @@ def log_auth_attempt(
     Logs at INFO level for success, WARNING for failure.
     """
     event_data = {
-        "event": "auth_attempt",
+        "event_type": "auth_attempt",
         "method": method,
         "success": success,
     }
@@ -148,7 +148,7 @@ def log_permission_check(
     Logs at DEBUG level for allowed, INFO for denied.
     """
     event_data = {
-        "event": "permission_check",
+        "event_type": "permission_check",
         "permission": permission,
         "allowed": allowed,
         "user_id": user_id,
@@ -181,7 +181,7 @@ def log_token_validation(
     Logs at DEBUG level for valid tokens, WARNING for invalid.
     """
     event_data = {
-        "event": "token_validation",
+        "event_type": "token_validation",
         "valid": valid,
         "method": method,
         "cached": cached,
@@ -215,7 +215,7 @@ def log_cache_operation(
     Logs at DEBUG level.
     """
     event_data = {
-        "event": "cache_operation",
+        "event_type": "cache_operation",
         "operation": operation,
         "cache_type": cache_type,
     }
@@ -241,7 +241,7 @@ def log_error(
     Logs at ERROR level with exception info.
     """
     event_data = {
-        "event": "error",
+        "event_type": "error",
         "error_type": type(error).__name__,
         "error_message": str(error),
     }
