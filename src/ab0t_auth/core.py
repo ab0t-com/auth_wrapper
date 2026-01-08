@@ -10,7 +10,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Awaitable, Callable, Literal, Sequence, TypeAlias, Union
+
+
+# =============================================================================
+# Type Aliases for Auth Check Callbacks
+# =============================================================================
+
+# Auth check callback receives (user, request) and returns bool
+# Used for custom authorization logic after authentication
+AuthCheck: TypeAlias = Callable[["AuthenticatedUser", Any], bool]
+AuthCheckAsync: TypeAlias = Callable[["AuthenticatedUser", Any], Awaitable[bool]]
+AuthCheckCallable: TypeAlias = Union[AuthCheck, AuthCheckAsync]
+
+# Flask version (request is global, so only receives user)
+AuthCheckSync: TypeAlias = Callable[["AuthenticatedUser"], bool]
+
+# Sequence of checks for multiple check support
+AuthChecks: TypeAlias = Sequence[AuthCheckCallable]
+AuthChecksSync: TypeAlias = Sequence[AuthCheckSync]
 
 
 # =============================================================================

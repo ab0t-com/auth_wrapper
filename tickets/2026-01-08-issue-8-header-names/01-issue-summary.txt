@@ -1,0 +1,146 @@
+================================================================================
+ISSUE #8: HEADER NAMES - FLEXIBLE TOKEN ROUTING
+================================================================================
+
+GitHub Issue: https://github.com/ab0t-com/auth_wrapper/issues/8
+Created: 2026-01-07T10:04:14Z
+Author: kaurifund
+Status: OPEN
+Labels: None
+
+================================================================================
+ISSUE SUMMARY
+================================================================================
+
+The user requests that the auth library automatically route tokens to the
+correct authentication method based on token format, regardless of which
+header is used.
+
+Current Behavior:
+- JWT tokens must be in Authorization header
+- API keys must be in X-API-Key header
+- Using wrong header results in TOKEN_NOT_FOUND error
+
+Requested Behavior:
+- Both headers should accept both token types
+- Library should auto-detect token type based on format/prefix
+- JWT tokens are identifiable by their structure (xxx.xxx.xxx)
+- API tokens are identifiable by prefix (e.g., ab0t_sk_live_*)
+- API token prefix should be configurable
+
+================================================================================
+ORIGINAL ISSUE TEXT
+================================================================================
+
+"I am of the opinion that it should work with both header bearer and header
+api-x thing as it meant to be in the correct verbage and usage.
+
+But, I think BOTH of them should work interchangeable, we can't expect the
+clients to always know what they are using, they just wnat to pass it in
+two one of those two options. and our library should route it. JWT are
+obviously jwt and ab0t api tokens are also obvioudly api tokens, see the
+prefix. Also that prefix should be a config defauling to "ab0t_sk_live"
+
+```
+curl -H "bearer: ab0t_sk_live_.............." http://localhost:8000/v1/proxy.ab0t.com/services
+{"error":"TOKEN_NOT_FOUND","message":"No valid authentication credentials provided","details":{"expected_header":"Authorization"}}
+```
+
+conciser this work
+
+Push back if needed, or agree if needed."
+
+================================================================================
+ANALYSIS
+================================================================================
+
+1. Current Implementation Review Needed:
+   - How does authenticate() currently handle Authorization vs X-API-Key?
+   - What validation is done on token format?
+   - Is there any token type detection currently?
+
+2. Token Type Detection Logic:
+   - JWT: Contains two periods (header.payload.signature)
+   - API Key: Starts with configurable prefix (default: ab0t_sk_live_)
+
+3. Implementation Options:
+
+   Option A: Auto-detect in authenticate()
+   - Accept token from either header
+   - Detect type based on format
+   - Route to appropriate validation
+   - Pros: Simple for clients
+   - Cons: Implicit behavior, potential security concerns
+
+   Option B: Accept both but require explicit type
+   - Accept from either header
+   - Use explicit token_type parameter or header hint
+   - Pros: Explicit, secure
+   - Cons: More client complexity
+
+   Option C: Keep separate but add detection
+   - Keep current header separation
+   - Add format validation to catch wrong-header errors
+   - Return helpful error message
+   - Pros: Clear separation, good errors
+   - Cons: Doesn't solve user's request
+
+4. Security Considerations:
+   - Should we allow API keys in Authorization header?
+   - Is auto-detection safe or could it be exploited?
+   - What if a JWT happens to start with the API key prefix?
+
+================================================================================
+PROPOSED SOLUTION
+================================================================================
+
+Implement smart token routing with configurable behavior:
+
+1. Add config option:
+   ```python
+   AB0T_AUTH_SMART_TOKEN_ROUTING=true  # default: false for backwards compat
+   AB0T_AUTH_API_KEY_PREFIX=ab0t_sk_live_  # default prefix
+   ```
+
+2. Add token detection function (pure):
+   ```python
+   def detect_token_type(token: str, api_key_prefix: str = "ab0t_sk_live_") -> TokenType:
+       """Detect token type from format."""
+       if token.startswith(api_key_prefix):
+           return TokenType.API_KEY
+       if token.count('.') == 2:
+           return TokenType.BEARER  # JWT format
+       return TokenType.UNKNOWN
+   ```
+
+3. Modify authenticate() to:
+   - Accept token from either header when smart routing enabled
+   - Detect token type
+   - Route to appropriate validation
+   - Fall back to current behavior when disabled
+
+================================================================================
+TASKS
+================================================================================
+
+[ ] Review current authentication flow in guard.py
+[ ] Design token detection logic
+[ ] Add configuration options
+[ ] Implement detect_token_type() function
+[ ] Modify authenticate() method
+[ ] Add tests for smart routing
+[ ] Update documentation
+[ ] Consider security implications
+
+================================================================================
+QUESTIONS FOR USER
+================================================================================
+
+1. Is backwards compatibility important? (keep current behavior as default)
+2. Should we validate API key prefix strictly or loosely?
+3. What should happen if token type detection is ambiguous?
+4. Any security concerns with allowing API keys in Authorization header?
+
+================================================================================
+END OF ISSUE SUMMARY
+================================================================================

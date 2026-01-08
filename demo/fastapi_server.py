@@ -249,16 +249,218 @@ async def get_content(
 
 
 # =============================================================================
+# Advanced Authorization (Check Callbacks)
+# =============================================================================
+
+# Check callbacks allow dynamic authorization based on request context.
+# The callback receives (user, request) and returns True/False.
+
+
+def can_access_tenant(user: AuthenticatedUser, request: Request) -> bool:
+    """Check if user belongs to the requested tenant."""
+    tenant_id = request.path_params.get("tenant_id")
+    return user.org_id == tenant_id or user.has_permission("admin:cross_tenant")
+
+
+def can_access_domain(user: AuthenticatedUser, request: Request) -> bool:
+    """Check if user can access the requested domain scope."""
+    domain = request.path_params.get("domain", "")
+    scope = domain.split('.')[0]  # e.g., "public" from "public.example.com"
+
+    return user.has_any_permission(
+        f"controller.write.services_{scope}",
+        "controller.write.services_all",
+        "controller.admin",
+    )
+
+
+# Reusable dependency with check callback
+tenant_access = require_auth(auth, check=can_access_tenant)
+domain_access = require_auth(
+    auth,
+    check=can_access_domain,
+    check_error="Not authorized for this domain",
+)
+
+
+@app.get("/tenants/{tenant_id}/data")
+async def get_tenant_data(
+    tenant_id: str,
+    user: AuthenticatedUser = Depends(tenant_access),
+):
+    """Tenant-scoped data - uses check callback to verify tenant membership."""
+    return {
+        "tenant_id": tenant_id,
+        "user_org": user.org_id,
+        "data": {"example": "tenant-specific data"},
+    }
+
+
+@app.post("/{domain}/services")
+async def register_domain_service(
+    domain: str,
+    user: AuthenticatedUser = Depends(domain_access),
+):
+    """
+    Domain-scoped service registration.
+
+    Uses check callback to verify user has permission for this domain scope.
+    For example:
+    - User with 'controller.write.services_public' can access public.example.com
+    - User with 'controller.write.services_all' can access any domain
+    - User with 'controller.admin' can access any domain
+    """
+    return {
+        "registered": True,
+        "domain": domain,
+        "scope": domain.split('.')[0],
+        "by_user": user.user_id,
+    }
+
+
+@app.delete("/{domain}/services/{service_id}")
+async def delete_domain_service(
+    domain: str,
+    service_id: str,
+    user: AuthenticatedUser = Depends(domain_access),
+):
+    """Delete service - reuses same domain access check."""
+    return {
+        "deleted": service_id,
+        "domain": domain,
+        "by_user": user.user_id,
+    }
+
+
+# Multiple checks with "any" mode (owner OR admin can delete)
+def is_resource_owner(user: AuthenticatedUser, request: Request) -> bool:
+    """Check if user owns the resource (simplified - would normally check DB)."""
+    resource_id = request.path_params.get("resource_id")
+    # In real app: return await db.check_owner(resource_id, user.user_id)
+    return resource_id.startswith(user.user_id[:4])  # Demo: ownership by prefix
+
+
+def is_admin(user: AuthenticatedUser, request: Request) -> bool:
+    """Check if user is an admin."""
+    return user.has_permission("admin:access")
+
+
+@app.delete("/resources/{resource_id}")
+async def delete_resource(
+    resource_id: str,
+    user: AuthenticatedUser = Depends(require_auth(
+        auth,
+        checks=[is_resource_owner, is_admin],
+        check_mode="any",  # Owner OR admin can delete
+        check_error="Must be owner or admin to delete",
+    )),
+):
+    """Delete resource - owner OR admin can delete."""
+    return {
+        "deleted": resource_id,
+        "by_user": user.user_id,
+    }
+
+
+# Multiple checks with "all" mode (must be verified AND have subscription)
+def is_verified_user(user: AuthenticatedUser, request: Request) -> bool:
+    """Check if user is verified."""
+    return user.metadata.get("email_verified", True)  # Demo: assume verified
+
+
+def has_premium_subscription(user: AuthenticatedUser, request: Request) -> bool:
+    """Check if user has premium subscription."""
+    return user.has_permission("premium:access")
+
+
+@app.post("/premium/features")
+async def premium_feature(
+    user: AuthenticatedUser = Depends(require_auth(
+        auth,
+        checks=[is_verified_user, has_premium_subscription],
+        check_mode="all",  # Both must pass
+        check_error="Premium subscription with verified account required",
+    )),
+):
+    """Premium feature - requires verified account AND premium subscription."""
+    return {
+        "feature": "premium",
+        "user": user.user_id,
+        "access_granted": True,
+    }
+
+
+# Permission check combined with custom check callback
+@app.get("/admin/tenants/{tenant_id}/settings")
+async def admin_tenant_settings(
+    tenant_id: str,
+    user: AuthenticatedUser = Depends(require_permission(
+        auth,
+        "admin:settings",
+        check=can_access_tenant,
+        check_error="Tenant access denied",
+    )),
+):
+    """
+    Admin settings for tenant - requires permission AND tenant access.
+
+    This combines:
+    1. Permission check: user must have 'admin:settings' permission
+    2. Check callback: user must belong to this tenant (or have cross-tenant access)
+    """
+    return {
+        "tenant_id": tenant_id,
+        "settings": {"theme": "dark"},
+        "admin_user": user.user_id,
+    }
+
+
+# =============================================================================
+# Alternative: Manual Check in Route (Simple Cases)
+# =============================================================================
+
+@app.post("/manual/{domain}/services")
+async def manual_domain_check(
+    domain: str,
+    user: AuthenticatedUser = Depends(require_auth(auth)),
+):
+    """
+    Alternative approach: manual permission check in route.
+
+    Use this for simple, one-off checks. Use check callbacks for
+    reusable logic across multiple routes.
+    """
+    from fastapi import HTTPException
+
+    scope = domain.split('.')[0]
+
+    if not user.has_any_permission(
+        f"controller.write.services_{scope}",
+        "controller.write.services_all",
+        "controller.admin",
+    ):
+        raise HTTPException(403, f"Not authorized for domain scope: {scope}")
+
+    return {
+        "registered": True,
+        "domain": domain,
+        "approach": "manual_check",
+    }
+
+
+# =============================================================================
 # Decorator Pattern Examples (Alternative to Depends)
 # =============================================================================
 
 # You can also use decorators similar to Flask style.
 # These require the request object and inject auth_user into kwargs.
+# Note: auth_user must have a default value (=None) to avoid FastAPI
+# interpreting it as a request body.
 
 
 @app.get("/decorator/protected")
 @protected(auth)
-async def decorator_protected(request: Request, auth_user: AuthenticatedUser):
+async def decorator_protected(request: Request, auth_user=None):
     """Protected route using decorator pattern."""
     return {
         "message": f"Hello from decorator pattern, {auth_user.email}!",
@@ -268,7 +470,7 @@ async def decorator_protected(request: Request, auth_user: AuthenticatedUser):
 
 @app.get("/decorator/permission")
 @perm_decorator(auth, "users:read")
-async def decorator_permission(request: Request, auth_user: AuthenticatedUser):
+async def decorator_permission(request: Request, auth_user=None):
     """Permission check using decorator pattern."""
     return {
         "permission": "users:read",
@@ -279,7 +481,7 @@ async def decorator_permission(request: Request, auth_user: AuthenticatedUser):
 
 @app.get("/decorator/multi-permission")
 @permissions_required(auth, "users:read", "reports:read", require_all=True)
-async def decorator_multi_permission(request: Request, auth_user: AuthenticatedUser):
+async def decorator_multi_permission(request: Request, auth_user=None):
     """Multiple permissions using decorator pattern."""
     return {
         "permissions": ["users:read", "reports:read"],
@@ -290,7 +492,7 @@ async def decorator_multi_permission(request: Request, auth_user: AuthenticatedU
 
 @app.get("/decorator/any-permission")
 @permissions_required(auth, "admin:access", "super:user", require_all=False)
-async def decorator_any_permission(request: Request, auth_user: AuthenticatedUser):
+async def decorator_any_permission(request: Request, auth_user=None):
     """Any of multiple permissions using decorator pattern."""
     return {
         "requires_any": ["admin:access", "super:user"],
@@ -301,12 +503,49 @@ async def decorator_any_permission(request: Request, auth_user: AuthenticatedUse
 
 @app.get("/decorator/role")
 @role_decorator(auth, "admin")
-async def decorator_role(request: Request, auth_user: AuthenticatedUser):
+async def decorator_role(request: Request, auth_user=None):
     """Role check using decorator pattern."""
     return {
         "role": "admin",
         "user": auth_user.user_id,
         "pattern": "decorator",
+    }
+
+
+# Decorator with check callback (using @protected)
+def decorator_tenant_check(user: AuthenticatedUser, request: Request) -> bool:
+    """Check tenant access for decorator pattern."""
+    tenant_id = request.path_params.get("tenant_id")
+    return user.org_id == tenant_id
+
+
+@app.get("/decorator/tenants/{tenant_id}/data")
+@protected(auth, check=decorator_tenant_check, check_error="Tenant access denied")
+async def decorator_tenant_data(request: Request, tenant_id: str, auth_user=None):
+    """Tenant data with check callback using decorator pattern."""
+    return {
+        "tenant_id": tenant_id,
+        "user": auth_user.user_id,
+        "pattern": "decorator_with_check",
+    }
+
+
+# Permission decorator with check callback (combines permission + dynamic check)
+@app.get("/decorator/admin/tenants/{tenant_id}/settings")
+@perm_decorator(auth, "admin:settings", check=decorator_tenant_check, check_error="Tenant access denied")
+async def decorator_admin_tenant_settings(request: Request, tenant_id: str, auth_user=None):
+    """
+    Admin settings for tenant - requires permission AND tenant access.
+
+    This combines:
+    1. Permission check: user must have 'admin:settings' permission
+    2. Check callback: user must belong to this tenant
+    """
+    return {
+        "tenant_id": tenant_id,
+        "settings": {"theme": "dark"},
+        "admin_user": auth_user.user_id,
+        "pattern": "decorator_permission_with_check",
     }
 
 
@@ -320,7 +559,7 @@ auth_decorator = Auth(auth)
 
 @app.get("/class/protected")
 @auth_decorator.protected()
-async def class_protected(request: Request, auth_user: AuthenticatedUser):
+async def class_protected(request: Request, auth_user=None):
     """Protected route using class-based decorator."""
     return {
         "message": f"Hello {auth_user.email}!",
@@ -330,7 +569,7 @@ async def class_protected(request: Request, auth_user: AuthenticatedUser):
 
 @app.get("/class/permission")
 @auth_decorator.permission("users:write")
-async def class_permission(request: Request, auth_user: AuthenticatedUser):
+async def class_permission(request: Request, auth_user=None):
     """Permission check using class-based decorator."""
     return {
         "permission": "users:write",
@@ -341,7 +580,7 @@ async def class_permission(request: Request, auth_user: AuthenticatedUser):
 
 @app.get("/class/role")
 @auth_decorator.role("editor")
-async def class_role(request: Request, auth_user: AuthenticatedUser):
+async def class_role(request: Request, auth_user=None):
     """Role check using class-based decorator."""
     return {
         "role": "editor",
@@ -352,12 +591,57 @@ async def class_role(request: Request, auth_user: AuthenticatedUser):
 
 @app.get("/class/pattern")
 @auth_decorator.pattern("users:*")
-async def class_pattern(request: Request, auth_user: AuthenticatedUser):
+async def class_pattern(request: Request, auth_user=None):
     """Pattern permission check using class-based decorator."""
     return {
         "pattern_match": "users:*",
         "user_permissions": list(auth_user.permissions),
         "pattern": "class_decorator",
+    }
+
+
+# Class-based decorator with check callback
+def class_domain_check(user: AuthenticatedUser, request: Request) -> bool:
+    """Check domain access for class-based decorator pattern."""
+    domain = request.path_params.get("domain", "")
+    scope = domain.split('.')[0]
+    return user.has_any_permission(
+        f"controller.write.services_{scope}",
+        "controller.write.services_all",
+    )
+
+
+def class_tenant_check(user: AuthenticatedUser, request: Request) -> bool:
+    """Check tenant access for class-based decorator pattern."""
+    tenant_id = request.path_params.get("tenant_id")
+    return user.org_id == tenant_id
+
+
+@app.post("/class/{domain}/services")
+@auth_decorator.protected(check=class_domain_check, check_error="Domain access denied")
+async def class_domain_service(request: Request, domain: str, auth_user=None):
+    """Domain service using class-based decorator with check callback."""
+    return {
+        "domain": domain,
+        "user": auth_user.user_id,
+        "pattern": "class_decorator_with_check",
+    }
+
+
+# Class-based permission decorator with check callback
+@app.get("/class/admin/tenants/{tenant_id}/settings")
+@auth_decorator.permission("admin:settings", check=class_tenant_check, check_error="Tenant access denied")
+async def class_admin_tenant_settings(request: Request, tenant_id: str, auth_user=None):
+    """
+    Admin settings for tenant using class-based decorator.
+
+    Combines permission check with tenant access check.
+    """
+    return {
+        "tenant_id": tenant_id,
+        "settings": {"theme": "dark"},
+        "admin_user": auth_user.user_id,
+        "pattern": "class_decorator_permission_with_check",
     }
 
 
