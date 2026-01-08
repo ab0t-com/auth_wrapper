@@ -1,0 +1,308 @@
+================================================================================
+ISSUE #9: SCOPED PERMISSION HELPERS FOR AuthenticatedUser
+================================================================================
+
+GitHub Issue: https://github.com/ab0t-com/auth_wrapper/issues/9
+Created: 2026-01-07T23:56:00Z
+Author: kaurifund
+Status: OPEN
+Labels: None
+Type: Feature Request
+
+================================================================================
+ISSUE SUMMARY
+================================================================================
+
+The user requests helper methods on AuthenticatedUser class for checking
+scoped permissions with wildcard support. This would standardize a common
+pattern across services using domain-scoped or resource-scoped permissions.
+
+Use Case:
+- Permissions like: controller.write.services_public, controller.write.services_app
+- Wildcard permissions: controller.write.services_all (grants access to all)
+- Admin override: controller.admin (grants all permissions for service)
+- Need to check if user can access a specific scope dynamically
+
+================================================================================
+PROPOSED METHODS
+================================================================================
+
+1. has_scoped_permission(base, scope, wildcard_suffix="_all")
+   ------------------------------------------------------------
+   Check if user has permission for a specific scope.
+
+   Checks (in order):
+   1. Exact: {base}_{scope}
+   2. Wildcard: {base}_{wildcard_suffix}
+   3. Admin: {service}.admin
+
+   Example:
+   ```python
+   user.has_scoped_permission("controller.write.services", "public")
+   # Checks: controller.write.services_public
+   #         controller.write.services_all
+   #         controller.admin
+   ```
+
+2. get_permission_scopes(base, wildcard_suffix="_all")
+   -----------------------------------------------------
+   Get all scopes user has for a base permission.
+
+   Example:
+   ```python
+   user.permissions = [
+       "controller.write.services_public",
+       "controller.write.services_app"
+   ]
+   user.get_permission_scopes("controller.write.services")
+   # Returns: ["public", "app"]
+   ```
+
+3. require_scoped_permission() dependency (optional)
+   --------------------------------------------------
+   FastAPI dependency that extracts scope from path parameter.
+
+   Example:
+   ```python
+   @router.post("/{domain}/services")
+   async def register_service(
+       domain: str,
+       user = Depends(require_scoped_permission(
+           auth,
+           "controller.write.services",
+           scope_param="domain",
+           scope_transform=lambda d: d.split('.')[0]
+       ))
+   ):
+       # User is authorized for this domain
+       ...
+   ```
+
+================================================================================
+CURRENT USER WORKAROUND
+================================================================================
+
+```python
+# controller/app/domain_permissions.py
+
+def check_domain_permission(user: AuthenticatedUser, action: str, domain: str) -> bool:
+    scope = domain.split('.')[0]
+    service = "controller"
+
+    checks = [
+        f"{service}.{action}.services_{scope}",
+        f"{service}.{action}.services_all",
+        f"{service}.admin",
+    ]
+
+    return any(perm in user.permissions for perm in checks)
+```
+
+================================================================================
+IMPLEMENTATION ANALYSIS
+================================================================================
+
+1. Location: Add methods to AuthenticatedUser class in core.py
+
+2. Pure Functions: These should be pure functions that can also be
+   used standalone (not just as methods)
+
+3. Separator Configuration: User asks about configurable separator
+   (`:` vs `_` vs `.`) - recommend supporting both `_` and `:` as
+   common patterns
+
+4. Integration with Existing Code:
+   - Aligns with existing has_permission(), has_any_permission() pattern
+   - Should follow same naming conventions
+   - Consider adding to permissions.py as pure functions too
+
+================================================================================
+PROPOSED IMPLEMENTATION
+================================================================================
+
+1. Add to AuthenticatedUser (core.py):
+
+```python
+def has_scoped_permission(
+    self,
+    base_permission: str,
+    scope: str,
+    *,
+    wildcard_suffix: str = "_all",
+    separator: str = "_",
+    check_admin: bool = True,
+) -> bool:
+    """
+    Check if user has permission for a specific scope.
+
+    Checks in order:
+    1. Exact: {base}{separator}{scope}
+    2. Wildcard: {base}{wildcard_suffix}
+    3. Admin: {service}.admin (if check_admin=True)
+
+    Args:
+        base_permission: Base permission string (e.g., "controller.write.services")
+        scope: Scope to check (e.g., "public")
+        wildcard_suffix: Suffix for wildcard permission (default: "_all")
+        separator: Separator between base and scope (default: "_")
+        check_admin: Whether to check for service admin permission
+
+    Returns:
+        True if user has any matching permission
+    """
+    # Check exact scope
+    scoped_perm = f"{base_permission}{separator}{scope}"
+    if scoped_perm in self.permissions:
+        return True
+
+    # Check wildcard
+    wildcard_perm = f"{base_permission}{wildcard_suffix}"
+    if wildcard_perm in self.permissions:
+        return True
+
+    # Check admin
+    if check_admin:
+        service = base_permission.split('.')[0]
+        admin_perm = f"{service}.admin"
+        if admin_perm in self.permissions:
+            return True
+
+    return False
+
+
+def get_permission_scopes(
+    self,
+    base_permission: str,
+    *,
+    separator: str = "_",
+    exclude_wildcards: bool = True,
+    wildcard_suffix: str = "_all",
+) -> tuple[str, ...]:
+    """
+    Get all scopes user has for a base permission.
+
+    Args:
+        base_permission: Base permission to search for
+        separator: Separator between base and scope
+        exclude_wildcards: Whether to exclude wildcard scopes from results
+        wildcard_suffix: Wildcard suffix to exclude
+
+    Returns:
+        Tuple of scope strings
+    """
+    prefix = f"{base_permission}{separator}"
+    scopes = []
+
+    for perm in self.permissions:
+        if perm.startswith(prefix):
+            scope = perm[len(prefix):]
+            if exclude_wildcards and scope == wildcard_suffix.lstrip(separator):
+                continue
+            scopes.append(scope)
+
+    return tuple(scopes)
+
+
+def has_wildcard_scope(
+    self,
+    base_permission: str,
+    wildcard_suffix: str = "_all",
+) -> bool:
+    """Check if user has wildcard permission for base."""
+    return f"{base_permission}{wildcard_suffix}" in self.permissions
+```
+
+2. Add pure functions to permissions.py:
+
+```python
+def check_scoped_permission(
+    user: AuthenticatedUser,
+    base_permission: str,
+    scope: str,
+    *,
+    wildcard_suffix: str = "_all",
+    separator: str = "_",
+    check_admin: bool = True,
+) -> PermissionResult:
+    """Pure function version of scoped permission check."""
+    ...
+
+def get_user_scopes(
+    user: AuthenticatedUser,
+    base_permission: str,
+    *,
+    separator: str = "_",
+) -> tuple[str, ...]:
+    """Pure function to get user's scopes."""
+    ...
+```
+
+3. Add FastAPI dependency to dependencies.py:
+
+```python
+def require_scoped_permission(
+    guard: AuthGuard,
+    base_permission: str,
+    *,
+    scope_param: str | None = None,
+    scope_header: str | None = None,
+    scope_transform: Callable[[str], str] | None = None,
+    wildcard_suffix: str = "_all",
+    separator: str = "_",
+    check_admin: bool = True,
+    allow_api_key: bool = True,
+) -> Callable[..., AuthenticatedUser]:
+    """
+    Dependency that requires scoped permission.
+
+    Extracts scope from path param or header, applies optional transform,
+    then checks scoped permission.
+    """
+    ...
+```
+
+================================================================================
+TASKS
+================================================================================
+
+[ ] Add has_scoped_permission() to AuthenticatedUser
+[ ] Add get_permission_scopes() to AuthenticatedUser
+[ ] Add has_wildcard_scope() to AuthenticatedUser
+[ ] Add pure function versions to permissions.py
+[ ] Add require_scoped_permission dependency
+[ ] Write comprehensive tests
+[ ] Update system prompt documentation
+[ ] Consider glob pattern integration (existing has_permission_pattern)
+
+================================================================================
+QUESTIONS FOR USER
+================================================================================
+
+1. Should separator be configurable or fixed to underscore?
+2. Should admin check be enabled by default?
+3. Should the dependency support extracting scope from query params too?
+4. Should we support multiple separators (e.g., both `_` and `:`)?
+
+================================================================================
+DESIGN CONSIDERATIONS
+================================================================================
+
+1. Backwards Compatibility:
+   - New methods, no breaking changes
+   - Optional parameters with sensible defaults
+
+2. Consistency:
+   - Follow existing naming patterns (has_*, check_*, require_*)
+   - Return types match existing functions
+
+3. Performance:
+   - O(n) where n is number of permissions
+   - Could optimize with prefix tree if permissions are large
+
+4. Integration:
+   - Works with existing permission patterns
+   - Complements glob pattern matching (check_permission_pattern)
+
+================================================================================
+END OF ISSUE SUMMARY
+================================================================================
