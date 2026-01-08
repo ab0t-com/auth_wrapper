@@ -4,7 +4,7 @@ IMPLEMENTATION PLAN: AUTH CHECK CALLBACK FEATURE
 
 Feature: Add optional `check` callback parameter to auth functions
 Issue: #9 (Inspired by scoped permissions request)
-Status: PROPOSED
+Status: COMPLETED
 Priority: Medium
 
 ================================================================================
@@ -468,47 +468,47 @@ SECTION 7: IMPLEMENTATION TASKS
 
 Phase 1: Core Types and Helpers
 -------------------------------
-[ ] Add AuthCheck type aliases to core.py
-[ ] Add _run_auth_checks helper to dependencies.py
-[ ] Add _run_auth_checks_sync helper to flask.py
-[ ] Write unit tests for check helpers
+[x] Add AuthCheck type aliases to core.py
+[x] Add _run_auth_checks helper to dependencies.py
+[x] Add _run_auth_checks_sync helper to flask.py
+[x] Write unit tests for check helpers
 
 Phase 2: FastAPI Dependencies
 -----------------------------
-[ ] Update require_auth() with check params
-[ ] Update require_permission() with check params
-[ ] Update require_any_permission() with check params
-[ ] Update require_all_permissions() with check params
-[ ] Update require_permission_pattern() with check params
-[ ] Update require_role() with check params
-[ ] Update require_any_role() with check params
-[ ] Update optional_auth() with check params
-[ ] Write tests for each updated dependency
+[x] Update require_auth() with check params
+[x] Update require_permission() with check params
+[x] Update require_any_permission() with check params
+[x] Update require_all_permissions() with check params
+[x] Update require_permission_pattern() with check params
+[x] Update require_role() with check params
+[x] Update require_any_role() with check params
+[x] Update optional_auth() with check params
+[x] Write tests for each updated dependency
 
 Phase 3: FastAPI Decorators
 ---------------------------
-[ ] Update @protected() with check params
-[ ] Update @permission_required() with check params
-[ ] Update @permissions_required() with check params
-[ ] Update @role_required() with check params
-[ ] Update @permission_pattern_required() with check params
-[ ] Write tests for each updated decorator
+[x] Update @protected() with check params
+[x] Update @permission_required() with check params
+[x] Update @permissions_required() with check params
+[x] Update @role_required() with check params
+[x] Update @permission_pattern_required() with check params
+[x] Write tests for each updated decorator
 
 Phase 4: Flask Decorators
 -------------------------
-[ ] Update @login_required() with check params
-[ ] Update @permission_required() with check params
-[ ] Update @permissions_required() with check params
-[ ] Update @role_required() with check params
-[ ] Update @permission_pattern_required() with check params
-[ ] Write tests for Flask decorators
+[x] Update @login_required() with check params
+[x] Update @permission_required() with check params
+[x] Update @permissions_required() with check params
+[x] Update @role_required() with check params
+[x] Update @permission_pattern_required() with check params
+[x] Write tests for Flask decorators
 
 Phase 5: Documentation
 ----------------------
-[ ] Update README with check callback examples
-[ ] Update docstrings with examples
-[ ] Add cookbook section for common patterns
-[ ] Update system prompt artifact
+[x] Update README with check callback examples
+[x] Update docstrings with examples
+[x] Add cookbook section for common patterns
+[x] Update system prompt artifact
 
 Phase 6: Response to Issue #9
 -----------------------------

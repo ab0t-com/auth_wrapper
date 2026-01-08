@@ -27,11 +27,13 @@ from __future__ import annotations
 import asyncio
 import functools
 from contextvars import ContextVar
-from typing import Any, Callable, ParamSpec, TypeVar
+from typing import Any, Callable, Literal, ParamSpec, Sequence, TypeVar
 
 from flask import Flask, Request, Response, g, request, jsonify
 
 from ab0t_auth.core import (
+    AuthCheckSync,
+    AuthChecksSync,
     AuthConfig,
     AuthContext,
     AuthenticatedUser,
@@ -406,35 +408,142 @@ class Ab0tAuth:
 
 
 # =============================================================================
+# Auth Check Helper
+# =============================================================================
+
+
+def _run_auth_checks_sync(
+    user: AuthenticatedUser,
+    check: AuthCheckSync | None,
+    checks: Sequence[AuthCheckSync] | None,
+    check_mode: Literal["all", "any"],
+    check_error: str,
+) -> None:
+    """
+    Run authorization checks synchronously and raise PermissionDeniedError on failure.
+
+    For Flask, check callback receives only user since request is global.
+    """
+    all_checks: list[AuthCheckSync] = []
+
+    if check is not None:
+        all_checks.append(check)
+    if checks is not None:
+        all_checks.extend(checks)
+
+    if not all_checks:
+        return  # No checks to run
+
+    for check_fn in all_checks:
+        result = check_fn(user)
+
+        # Short-circuit for "any" mode on success
+        if check_mode == "any" and result:
+            return
+
+        # Short-circuit for "all" mode on failure
+        if check_mode == "all" and not result:
+            raise PermissionDeniedError(check_error)
+
+    # If we get here in "any" mode, no check passed
+    if check_mode == "any":
+        raise PermissionDeniedError(check_error)
+
+
+# =============================================================================
 # Decorators
 # =============================================================================
 
 
-def login_required(f: Callable[P, T]) -> Callable[P, T]:
+def login_required(
+    f: Callable[P, T] | None = None,
+    *,
+    check: AuthCheckSync | None = None,
+    checks: Sequence[AuthCheckSync] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
+) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
     """
     Decorator to require authentication.
+
+    Can be used with or without parentheses:
+        @login_required
+        def route(): ...
+
+        @login_required()
+        def route(): ...
+
+        @login_required(check=my_check)
+        def route(): ...
+
+    Args:
+        f: The function to decorate (when used without parentheses)
+        check: Single authorization check callback (optional)
+        checks: List of authorization check callbacks (optional)
+        check_mode: "all" requires all checks pass, "any" requires one
+        check_error: Error message when check fails
+
+    The check callback receives only the user (request is global in Flask):
+        def my_check(user: AuthenticatedUser) -> bool:
+            return user.org_id == request.view_args.get("org_id")
 
     Example:
         @app.route("/protected")
         @login_required
         def protected():
             return {"user": current_user.user_id}
+
+        # With authorization check
+        def can_access_tenant(user: AuthenticatedUser) -> bool:
+            tenant_id = request.view_args.get("tenant_id")
+            return user.org_id == tenant_id
+
+        @app.route("/tenants/<tenant_id>/data")
+        @login_required(check=can_access_tenant)
+        def tenant_data(tenant_id):
+            return {"tenant": tenant_id}
     """
-    @functools.wraps(f)
-    def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
-        user = get_current_user()
-        if user is None:
-            raise TokenNotFoundError(
-                "Authentication required",
-                expected_header="Authorization",
-            )
-        return f(*args, **kwargs)
-    return decorated  # type: ignore
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        @functools.wraps(func)
+        def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
+            user = get_current_user()
+            if user is None:
+                raise TokenNotFoundError(
+                    "Authentication required",
+                    expected_header="Authorization",
+                )
+
+            # Run authorization checks if provided
+            _run_auth_checks_sync(user, check, checks, check_mode, check_error)
+
+            return func(*args, **kwargs)
+        return decorated  # type: ignore
+
+    # Support both @login_required and @login_required()
+    if f is not None:
+        return decorator(f)
+    return decorator
 
 
-def permission_required(permission: str) -> Callable[[Callable[P, T]], Callable[P, T]]:
+def permission_required(
+    permission: str,
+    *,
+    check: AuthCheckSync | None = None,
+    checks: Sequence[AuthCheckSync] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """
     Decorator to require specific permission.
+
+    Authorization checks run AFTER permission check.
+
+    Args:
+        permission: Permission string to require
+        check: Single authorization check callback (optional)
+        checks: List of authorization check callbacks (optional)
+        check_mode: "all" requires all checks pass, "any" requires one
+        check_error: Error message when check fails
 
     Example:
         @app.route("/admin")
@@ -456,6 +565,10 @@ def permission_required(permission: str) -> Callable[[Callable[P, T]], Callable[
                     required_permission=permission,
                     user_permissions=list(user.permissions),
                 )
+
+            # Run authorization checks if provided
+            _run_auth_checks_sync(user, check, checks, check_mode, check_error)
+
             return f(*args, **kwargs)
         return decorated  # type: ignore
     return decorator
@@ -464,9 +577,23 @@ def permission_required(permission: str) -> Callable[[Callable[P, T]], Callable[
 def permissions_required(
     *permissions: str,
     require_all: bool = True,
+    check: AuthCheckSync | None = None,
+    checks: Sequence[AuthCheckSync] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """
     Decorator to require multiple permissions.
+
+    Authorization checks run AFTER permission checks.
+
+    Args:
+        *permissions: Permission strings to check
+        require_all: If True, require all permissions. If False, any permission suffices.
+        check: Single authorization check callback (optional)
+        checks: List of authorization check callbacks (optional)
+        check_mode: "all" requires all checks pass, "any" requires one
+        check_error: Error message when check fails
 
     Example:
         @app.route("/sensitive")
@@ -497,14 +624,34 @@ def permissions_required(
                     required_permission=",".join(permissions),
                     user_permissions=list(user.permissions),
                 )
+
+            # Run authorization checks if provided
+            _run_auth_checks_sync(user, check, checks, check_mode, check_error)
+
             return f(*args, **kwargs)
         return decorated  # type: ignore
     return decorator
 
 
-def role_required(role: str) -> Callable[[Callable[P, T]], Callable[P, T]]:
+def role_required(
+    role: str,
+    *,
+    check: AuthCheckSync | None = None,
+    checks: Sequence[AuthCheckSync] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """
     Decorator to require specific role.
+
+    Authorization checks run AFTER role check.
+
+    Args:
+        role: Role string to require
+        check: Single authorization check callback (optional)
+        checks: List of authorization check callbacks (optional)
+        check_mode: "all" requires all checks pass, "any" requires one
+        check_error: Error message when check fails
 
     Example:
         @app.route("/admin")
@@ -524,6 +671,10 @@ def role_required(role: str) -> Callable[[Callable[P, T]], Callable[P, T]]:
                     f"Role '{role}' required",
                     required_permission=f"role:{role}",
                 )
+
+            # Run authorization checks if provided
+            _run_auth_checks_sync(user, check, checks, check_mode, check_error)
+
             return f(*args, **kwargs)
         return decorated  # type: ignore
     return decorator
@@ -531,9 +682,23 @@ def role_required(role: str) -> Callable[[Callable[P, T]], Callable[P, T]]:
 
 def permission_pattern_required(
     pattern: str,
+    *,
+    check: AuthCheckSync | None = None,
+    checks: Sequence[AuthCheckSync] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """
     Decorator to require permission matching pattern.
+
+    Authorization checks run AFTER pattern check.
+
+    Args:
+        pattern: Glob pattern to match against permissions
+        check: Single authorization check callback (optional)
+        checks: List of authorization check callbacks (optional)
+        check_mode: "all" requires all checks pass, "any" requires one
+        check_error: Error message when check fails
 
     Example:
         @app.route("/admin/anything")
@@ -555,6 +720,10 @@ def permission_pattern_required(
                     required_permission=pattern,
                     user_permissions=list(user.permissions),
                 )
+
+            # Run authorization checks if provided
+            _run_auth_checks_sync(user, check, checks, check_mode, check_error)
+
             return f(*args, **kwargs)
         return decorated  # type: ignore
     return decorator

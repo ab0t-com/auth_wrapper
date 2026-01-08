@@ -162,6 +162,134 @@ require_all_permissions(auth, "users:read", "users:write")
 require_permission_pattern(auth, "org:*:admin")
 ```
 
+### Advanced Authorization (Dynamic Checks)
+
+Sometimes you need authorization logic that goes beyond static permissions—like checking if a user can access a specific resource based on path parameters, or verifying tenant membership dynamically.
+
+**Two approaches:**
+
+#### Option 1: Check Callbacks (Recommended for Complex Logic)
+
+Use the `check` parameter to add custom authorization logic that runs after authentication:
+
+```python
+from fastapi import Request
+from ab0t_auth import require_auth, AuthenticatedUser
+
+# Define your authorization logic
+def can_access_domain(user: AuthenticatedUser, request: Request) -> bool:
+    """Check if user can access the requested domain scope."""
+    domain = request.path_params.get("domain", "")
+    scope = domain.split('.')[0]  # e.g., "public" from "public.example.com"
+
+    return user.has_any_permission(
+        f"controller.write.services_{scope}",
+        "controller.write.services_all",
+        "controller.admin",
+    )
+
+# Use with dependency
+@router.post("/{domain}/services")
+async def register_service(
+    domain: str,
+    user: AuthenticatedUser = Depends(require_auth(auth, check=can_access_domain)),
+):
+    # User is already authorized for this domain!
+    return {"registered": domain}
+```
+
+**Reusable across routes:**
+
+```python
+# Create reusable dependency
+domain_access = require_auth(auth, check=can_access_domain)
+
+@router.post("/{domain}/services")
+async def register_service(domain: str, user = Depends(domain_access)):
+    ...
+
+@router.delete("/{domain}/services/{id}")
+async def delete_service(domain: str, id: str, user = Depends(domain_access)):
+    ...
+```
+
+**Multiple checks with modes:**
+
+```python
+# All checks must pass
+@router.post("/premium/features")
+async def premium_feature(
+    user = Depends(require_auth(
+        auth,
+        checks=[is_verified, has_active_subscription],
+        check_mode="all",
+        check_error="Premium subscription required",
+    )),
+):
+    ...
+
+# Any check can pass (owner OR admin)
+@router.delete("/resources/{id}")
+async def delete_resource(
+    id: str,
+    user = Depends(require_auth(
+        auth,
+        checks=[is_owner, is_admin],
+        check_mode="any",
+    )),
+):
+    ...
+```
+
+#### Option 2: Manual Check in Route (Simple Cases)
+
+For simpler cases, check permissions directly in your route:
+
+```python
+@router.post("/{domain}/services")
+async def register_service(
+    domain: str,
+    user: AuthenticatedUser = Depends(require_auth(auth)),
+):
+    scope = domain.split('.')[0]
+
+    if not user.has_any_permission(
+        f"controller.write.services_{scope}",
+        "controller.write.services_all",
+        "controller.admin",
+    ):
+        raise HTTPException(403, "Not authorized for this domain")
+
+    return {"registered": domain}
+```
+
+**When to use which:**
+
+| Approach | Best For |
+|----------|----------|
+| Check callbacks | Reusable logic, multiple routes, async DB lookups |
+| Manual check | One-off checks, simple inline logic |
+
+#### Flask Check Callbacks
+
+Flask uses global `request`, so check callbacks receive only the user:
+
+```python
+from flask import request
+from ab0t_auth.flask import login_required, get_current_user
+
+def can_access_tenant(user: AuthenticatedUser) -> bool:
+    tenant_id = request.view_args.get("tenant_id")
+    return user.org_id == tenant_id
+
+@app.route("/tenants/<tenant_id>/data")
+@login_required(check=can_access_tenant)
+def get_tenant_data(tenant_id):
+    return {"tenant": tenant_id}
+```
+
+---
+
 ### Multi-Tenancy Built In
 
 Ab0t is multi-tenant by design. Each user belongs to a tenant (company), with support for nested organizations.
