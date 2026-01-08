@@ -80,12 +80,40 @@ def get_current_user() -> AuthenticatedUser | None:
     Get current authenticated user.
 
     Returns None if not authenticated.
+    Use get_current_user_or_raise() if you want to ensure authentication.
     """
     # Try context var first, then flask.g
     user = _current_user.get()
     if user is not None:
         return user
     return getattr(g, "auth_user", None)
+
+
+def get_current_user_or_raise() -> AuthenticatedUser:
+    """
+    Get current authenticated user or raise TokenNotFoundError.
+
+    Use this when authentication is required and you want to avoid
+    None checks. Safer than get_current_user() when you expect
+    the user to always be authenticated.
+
+    Raises:
+        TokenNotFoundError: If no user is authenticated.
+
+    Example:
+        @app.route("/profile")
+        @login_required
+        def profile():
+            user = get_current_user_or_raise()  # Safe - never None after @login_required
+            return {"email": user.email}
+    """
+    user = get_current_user()
+    if user is None:
+        raise TokenNotFoundError(
+            "Authentication required",
+            expected_header="Authorization",
+        )
+    return user
 
 
 # Alias for Flask-Login compatibility
@@ -237,7 +265,7 @@ class Ab0tAuth:
         """
         # Skip for excluded paths (configure via app config)
         excluded = getattr(self.app, "config", {}).get("AB0T_AUTH_EXCLUDE_PATHS", [])
-        if request.path in excluded:
+        if self._should_exclude_path(request.path, excluded):
             g.auth_user = None
             g.auth_context = None
             return
@@ -260,6 +288,25 @@ class Ab0tAuth:
 
         # Also set context var for thread safety
         _current_user.set(result.user)
+
+    def _should_exclude_path(self, path: str, exclude_paths: Sequence[str]) -> bool:
+        """
+        Check if path should be excluded from authentication.
+
+        Supports exact match and prefix patterns with '*' suffix:
+        - "/health" matches only "/health"
+        - "/api/public/*" matches "/api/public/", "/api/public/anything"
+        """
+        for pattern in exclude_paths:
+            if pattern.endswith("*"):
+                # Prefix match for patterns ending with *
+                if path.startswith(pattern[:-1]):
+                    return True
+            else:
+                # Exact match
+                if path == pattern:
+                    return True
+        return False
 
     def authenticate(
         self,
@@ -411,6 +458,29 @@ class Ab0tAuth:
 # Auth Check Helper
 # =============================================================================
 
+import logging
+from typing import Any
+
+_logger = logging.getLogger("ab0t_auth.flask")
+
+
+def _validate_check_result_sync(result: Any, callback_name: str) -> bool:
+    """
+    Validate and normalize check callback result to bool.
+
+    Logs warning for non-bool returns and treats them as failure (safe default).
+    """
+    if isinstance(result, bool):
+        return result
+
+    _logger.warning(
+        "Check callback '%s' returned non-bool type '%s', treating as False. "
+        "Check callbacks must return bool for security.",
+        callback_name,
+        type(result).__name__,
+    )
+    return False
+
 
 def _run_auth_checks_sync(
     user: AuthenticatedUser,
@@ -423,6 +493,11 @@ def _run_auth_checks_sync(
     Run authorization checks synchronously and raise PermissionDeniedError on failure.
 
     For Flask, check callback receives only user since request is global.
+
+    Security features:
+    - Validates callback returns bool (non-bool treated as False)
+    - Catches exceptions from callbacks (treated as failure)
+    - Logs warnings for debugging
     """
     all_checks: list[AuthCheckSync] = []
 
@@ -435,7 +510,21 @@ def _run_auth_checks_sync(
         return  # No checks to run
 
     for check_fn in all_checks:
-        result = check_fn(user)
+        callback_name = getattr(check_fn, "__name__", repr(check_fn))
+
+        # Execute callback with exception handling
+        try:
+            raw_result = check_fn(user)
+        except Exception as e:
+            _logger.warning(
+                "Check callback '%s' raised exception: %s. Treating as False.",
+                callback_name,
+                str(e),
+            )
+            raw_result = False
+
+        # Validate return type (non-bool is treated as False)
+        result = _validate_check_result_sync(raw_result, callback_name)
 
         # Short-circuit for "any" mode on success
         if check_mode == "any" and result:
@@ -762,6 +851,7 @@ def init_blueprint_auth(auth: Ab0tAuth) -> Callable[[Callable[P, T]], Callable[P
 __all__ = [
     "Ab0tAuth",
     "get_current_user",
+    "get_current_user_or_raise",
     "login_required",
     "permission_required",
     "permissions_required",

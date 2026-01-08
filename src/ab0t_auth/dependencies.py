@@ -16,7 +16,13 @@ from ab0t_auth.core import (
     AuthCheckCallable,
     AuthenticatedUser,
 )
-from ab0t_auth.errors import PermissionDeniedError, TokenNotFoundError
+from ab0t_auth.errors import (
+    InsufficientScopeError,
+    PermissionDeniedError,
+    TokenExpiredError,
+    TokenInvalidError,
+    TokenNotFoundError,
+)
 from ab0t_auth.guard import AuthGuard
 from ab0t_auth.permissions import (
     check_all_permissions,
@@ -39,6 +45,28 @@ ApiKeyHeader = Annotated[str | None, Header(alias="X-API-Key")]
 # Auth Check Helper
 # =============================================================================
 
+import logging
+
+_logger = logging.getLogger("ab0t_auth.dependencies")
+
+
+def _validate_check_result(result: Any, callback_name: str) -> bool:
+    """
+    Validate and normalize check callback result to bool.
+
+    Logs warning for non-bool returns and treats them as failure (safe default).
+    """
+    if isinstance(result, bool):
+        return result
+
+    _logger.warning(
+        "Check callback '%s' returned non-bool type '%s', treating as False. "
+        "Check callbacks must return bool for security.",
+        callback_name,
+        type(result).__name__,
+    )
+    return False
+
 
 async def _run_auth_checks(
     user: AuthenticatedUser,
@@ -52,6 +80,11 @@ async def _run_auth_checks(
     Run authorization checks and raise PermissionDeniedError on failure.
 
     Supports both sync and async check functions.
+
+    Security features:
+    - Validates callback returns bool (non-bool treated as False)
+    - Catches exceptions from callbacks (treated as failure)
+    - Logs warnings for debugging
     """
     all_checks: list[AuthCheckCallable] = []
 
@@ -64,11 +97,24 @@ async def _run_auth_checks(
         return  # No checks to run
 
     for check_fn in all_checks:
-        # Support both sync and async checks
-        if asyncio.iscoroutinefunction(check_fn):
-            result = await check_fn(user, request)
-        else:
-            result = check_fn(user, request)
+        callback_name = getattr(check_fn, "__name__", repr(check_fn))
+
+        # Execute callback with exception handling
+        try:
+            if asyncio.iscoroutinefunction(check_fn):
+                raw_result = await check_fn(user, request)
+            else:
+                raw_result = check_fn(user, request)
+        except Exception as e:
+            _logger.warning(
+                "Check callback '%s' raised exception: %s. Treating as False.",
+                callback_name,
+                str(e),
+            )
+            raw_result = False
+
+        # Validate return type (non-bool is treated as False)
+        result = _validate_check_result(raw_result, callback_name)
 
         # Short-circuit for "any" mode on success
         if check_mode == "any" and result:
@@ -358,8 +404,19 @@ def optional_auth(
     """
     Create dependency that optionally authenticates.
 
-    Returns None if not authenticated (no error raised).
-    If authenticated, runs checks; returns None if checks fail.
+    Returns None if:
+    - No credentials provided
+    - Token is invalid/expired (expected auth failures)
+    - Authorization checks fail
+
+    Raises (does NOT return None) for:
+    - Auth service unavailable (503)
+    - JWKS fetch errors (503)
+    - Configuration errors (500)
+    - Unexpected exceptions
+
+    This ensures service problems are visible rather than silently
+    treated as "unauthenticated".
 
     Example:
         @app.get("/content")
@@ -380,20 +437,23 @@ def optional_auth(
             return None
 
         api_key = x_api_key if allow_api_key else None
-        result = await guard.authenticate(authorization, api_key)
 
-        if not result.success or result.user is None:
+        try:
+            user = await guard.authenticate_or_raise(authorization, api_key)
+        except (TokenInvalidError, TokenExpiredError, TokenNotFoundError, InsufficientScopeError):
+            # Expected auth failures - treat as unauthenticated
             return None
+        # Let other exceptions propagate (AuthServiceError, JWKSFetchError, etc.)
 
         # Run checks if provided; return None on failure (don't raise)
         try:
             await _run_auth_checks(
-                result.user, request, check, checks, check_mode, "Check failed"
+                user, request, check, checks, check_mode, "Check failed"
             )
         except PermissionDeniedError:
             return None
 
-        return result.user
+        return user
 
     return dependency
 

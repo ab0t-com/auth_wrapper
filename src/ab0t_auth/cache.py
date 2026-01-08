@@ -241,28 +241,30 @@ class PermissionCache:
 @dataclass
 class JWKSCache:
     """
-    Cache for JWKS public keys.
+    Thread-safe cache for JWKS public keys.
 
+    Uses TTLCache for automatic expiration and thread safety.
     Longer TTL since keys change infrequently.
     """
 
     ttl: int = 300  # 5 minutes default
-    _cache: dict[str, JWKSCacheEntry] = field(default_factory=dict)
+    max_size: int = 100  # Max number of JWKS entries (per auth_url/org_id combo)
+    _cache: TTLCache[str, JWKSCacheEntry] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._cache = TTLCache(maxsize=self.max_size, ttl=self.ttl)
 
     def get(self, auth_url: str, org_id: str | None = None) -> dict[str, Any] | None:
         """
         Get cached JWKS.
 
         Returns None if not cached or expired.
+        Thread-safe via TTLCache.
         """
         key = create_jwks_cache_key(auth_url, org_id)
         entry = self._cache.get(key)
 
         if entry is None:
-            return None
-
-        if time.time() >= entry.expires_at:
-            del self._cache[key]
             return None
 
         return entry.keys
@@ -274,7 +276,12 @@ class JWKSCache:
         org_id: str | None = None,
         ttl: int | None = None,
     ) -> None:
-        """Cache JWKS keys."""
+        """
+        Cache JWKS keys.
+
+        Thread-safe via TTLCache.
+        Note: Per-entry ttl parameter is stored for reference but cache-level TTL applies.
+        """
         key = create_jwks_cache_key(auth_url, org_id)
         now = time.time()
         effective_ttl = ttl if ttl is not None else self.ttl
@@ -291,6 +298,7 @@ class JWKSCache:
         Invalidate cached JWKS.
 
         Returns True if was cached.
+        Thread-safe via TTLCache.
         """
         key = create_jwks_cache_key(auth_url, org_id)
         if key in self._cache:
@@ -301,6 +309,11 @@ class JWKSCache:
     def clear(self) -> None:
         """Clear all cached JWKS."""
         self._cache.clear()
+
+    @property
+    def size(self) -> int:
+        """Current cache size."""
+        return len(self._cache)
 
 
 # =============================================================================

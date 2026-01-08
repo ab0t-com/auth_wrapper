@@ -319,18 +319,18 @@ class TestCheckCallbackValidation:
     """Tests for check callback return value validation."""
 
     @pytest.mark.asyncio
-    async def test_callback_returning_user_object_is_truthy(
+    async def test_callback_returning_user_object_is_rejected(
         self, test_user: AuthenticatedUser, mock_request: MagicMock
     ) -> None:
-        """Test that callback returning user object passes (truthy)."""
+        """Test that callback returning user object is rejected (non-bool)."""
 
         def bad_callback(user: AuthenticatedUser, request: Request) -> AuthenticatedUser:
             """Bug: returns user instead of bool."""
             return user  # type: ignore
 
-        # This PASSES because user object is truthy
-        # This is a potential security issue if developer makes this mistake
-        try:
+        # SECURITY FIX: Non-bool returns are now treated as False
+        # This prevents accidental authorization bypass from developer mistakes
+        with pytest.raises(PermissionDeniedError):
             await _run_auth_checks(
                 test_user,
                 mock_request,
@@ -339,25 +339,19 @@ class TestCheckCallbackValidation:
                 check_mode="all",
                 check_error="Check failed",
             )
-            # If we get here, the check passed (truthy user object)
-            callback_passed = True
-        except PermissionDeniedError:
-            callback_passed = False
-
-        # Document: non-bool truthy values pass the check
-        assert callback_passed is True
 
     @pytest.mark.asyncio
-    async def test_callback_returning_string_is_truthy(
+    async def test_callback_returning_string_is_rejected(
         self, test_user: AuthenticatedUser, mock_request: MagicMock
     ) -> None:
-        """Test that callback returning non-empty string passes."""
+        """Test that callback returning non-empty string is rejected (non-bool)."""
 
         def string_callback(user: AuthenticatedUser, request: Request) -> str:
             """Bug: returns string instead of bool."""
             return "yes"  # type: ignore
 
-        try:
+        # SECURITY FIX: Non-bool returns are now treated as False
+        with pytest.raises(PermissionDeniedError):
             await _run_auth_checks(
                 test_user,
                 mock_request,
@@ -366,12 +360,6 @@ class TestCheckCallbackValidation:
                 check_mode="all",
                 check_error="Check failed",
             )
-            passed = True
-        except PermissionDeniedError:
-            passed = False
-
-        # Non-empty string is truthy
-        assert passed is True
 
     @pytest.mark.asyncio
     async def test_callback_returning_empty_string_fails(
@@ -412,23 +400,24 @@ class TestCheckCallbackValidation:
             )
 
     @pytest.mark.asyncio
-    async def test_callback_returning_one_passes(
+    async def test_callback_returning_one_is_rejected(
         self, test_user: AuthenticatedUser, mock_request: MagicMock
     ) -> None:
-        """Test that callback returning 1 passes (truthy)."""
+        """Test that callback returning 1 is rejected (non-bool)."""
 
         def one_callback(user: AuthenticatedUser, request: Request) -> int:
             return 1  # type: ignore
 
-        # Should not raise
-        await _run_auth_checks(
-            test_user,
-            mock_request,
-            check=one_callback,  # type: ignore
-            checks=None,
-            check_mode="all",
-            check_error="Check failed",
-        )
+        # SECURITY FIX: Non-bool returns are now treated as False
+        with pytest.raises(PermissionDeniedError):
+            await _run_auth_checks(
+                test_user,
+                mock_request,
+                check=one_callback,  # type: ignore
+                checks=None,
+                check_mode="all",
+                check_error="Check failed",
+            )
 
     @pytest.mark.asyncio
     async def test_callback_returning_none_fails(
@@ -450,16 +439,17 @@ class TestCheckCallbackValidation:
             )
 
     @pytest.mark.asyncio
-    async def test_callback_raising_exception(
+    async def test_callback_raising_exception_is_caught(
         self, test_user: AuthenticatedUser, mock_request: MagicMock
     ) -> None:
-        """Test that callback raising exception propagates."""
+        """Test that callback raising exception is caught and treated as failure."""
 
         def crashing_callback(user: AuthenticatedUser, request: Request) -> bool:
             raise ValueError("Database connection failed")
 
-        # Exception should propagate (not caught)
-        with pytest.raises(ValueError, match="Database connection failed"):
+        # SECURITY FIX: Exceptions are now caught and treated as False
+        # This prevents 500 errors and ensures fail-closed behavior
+        with pytest.raises(PermissionDeniedError):
             await _run_auth_checks(
                 test_user,
                 mock_request,
@@ -470,15 +460,16 @@ class TestCheckCallbackValidation:
             )
 
     @pytest.mark.asyncio
-    async def test_async_callback_exception(
+    async def test_async_callback_exception_is_caught(
         self, test_user: AuthenticatedUser, mock_request: MagicMock
     ) -> None:
-        """Test that async callback exceptions propagate."""
+        """Test that async callback exceptions are caught and treated as failure."""
 
         async def async_crashing_callback(user: AuthenticatedUser, request: Request) -> bool:
             raise ConnectionError("Auth service unreachable")
 
-        with pytest.raises(ConnectionError):
+        # SECURITY FIX: Exceptions are now caught and treated as False
+        with pytest.raises(PermissionDeniedError):
             await _run_auth_checks(
                 test_user,
                 mock_request,
