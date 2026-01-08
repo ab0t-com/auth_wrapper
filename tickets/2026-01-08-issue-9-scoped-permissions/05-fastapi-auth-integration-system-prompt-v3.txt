@@ -2017,14 +2017,206 @@ def should_introspect(claims: TokenClaims, *, introspect_threshold: int = 300) -
 ```
 
 ================================================================================
-SECTION 18: ADVANCED AUTHORIZATION (DYNAMIC CHECKS)
+SECTION 18: AB0T RECOMMENDED APPROACH (STANDARD)
 ================================================================================
 
-For complex authorization scenarios where static permissions aren't enough,
-use check callbacks to implement dynamic authorization logic based on request
-context (path parameters, headers, query params, etc.).
+This section defines the ab0t-approved standard way to implement authentication
+and authorization. While the library supports multiple patterns for flexibility,
+this is the recommended approach for most applications.
 
-18.1 When to Use Check Callbacks
+18.1 The Standard: FastAPI Dependencies + Annotated Types
+---------------------------------------------------------
+
+For FastAPI applications, use the dependency pattern with Annotated type aliases:
+
+```python
+from typing import Annotated
+from fastapi import FastAPI, Depends
+from ab0t_auth import AuthGuard, AuthenticatedUser, require_auth, require_permission
+
+auth = AuthGuard(auth_url="https://auth.service.ab0t.com")
+
+# Define type aliases ONCE at module level
+CurrentUser = Annotated[AuthenticatedUser, Depends(require_auth(auth))]
+AdminUser = Annotated[AuthenticatedUser, Depends(require_permission(auth, "admin:access"))]
+
+# Use throughout your routes - clean and consistent
+@app.get("/me")
+async def get_me(user: CurrentUser):
+    return {"user_id": user.user_id}
+
+@app.get("/admin")
+async def admin_panel(user: AdminUser):
+    return {"admin": True}
+```
+
+WHY THIS IS THE STANDARD:
+- Native FastAPI pattern (uses Depends())
+- Full type safety and IDE autocomplete
+- Reusable across all routes
+- Clean, readable route signatures
+- No quirks or workarounds needed
+
+18.2 The Standard: Check Callbacks for Dynamic Authorization
+------------------------------------------------------------
+
+When you need authorization based on request context, use check callbacks
+with reusable dependencies:
+
+```python
+from fastapi import Request
+
+# Step 1: Define check functions
+def can_access_tenant(user: AuthenticatedUser, request: Request) -> bool:
+    tenant_id = request.path_params.get("tenant_id")
+    return user.org_id == tenant_id or user.has_permission("admin:cross_tenant")
+
+# Step 2: Create reusable dependency WITH the check
+TenantUser = Annotated[AuthenticatedUser, Depends(require_auth(
+    auth,
+    check=can_access_tenant,
+    check_error="Tenant access denied",
+))]
+
+# Step 3: Use in routes - authorization is automatic
+@app.get("/tenants/{tenant_id}/data")
+async def get_tenant_data(tenant_id: str, user: TenantUser):
+    return {"tenant_id": tenant_id, "data": {...}}
+
+@app.get("/tenants/{tenant_id}/settings")
+async def get_tenant_settings(tenant_id: str, user: TenantUser):
+    return {"tenant_id": tenant_id, "settings": {...}}
+```
+
+WHY THIS IS THE STANDARD:
+- Check logic defined once, reused everywhere
+- Authorization happens automatically before route executes
+- Route code stays focused on business logic
+- Easy to test (mock the dependency)
+- Consistent error handling
+
+18.3 The Standard: Flask Decorators
+-----------------------------------
+
+For Flask applications, use the decorator pattern (Flask's natural style):
+
+```python
+from flask import Flask, request, jsonify
+from ab0t_auth.flask import Ab0tAuth, login_required, permission_required, get_current_user
+
+app = Flask(__name__)
+auth = Ab0tAuth(app, auth_url="https://auth.service.ab0t.com")
+
+# Define check functions (Flask: user only, request is global)
+def can_access_tenant(user):
+    tenant_id = request.view_args.get("tenant_id")
+    return user.org_id == tenant_id
+
+# Use decorators - Flask's natural pattern
+@app.route("/tenants/<tenant_id>/data")
+@login_required(check=can_access_tenant, check_error="Tenant access denied")
+def get_tenant_data(tenant_id):
+    user = get_current_user()
+    return jsonify({"tenant_id": tenant_id, "user": user.user_id})
+
+@app.route("/admin")
+@permission_required("admin:access")
+def admin_panel():
+    return jsonify({"admin": True})
+```
+
+18.4 When to Deviate from the Standard
+--------------------------------------
+
+Use MANUAL checks in route only when:
+- One-off check that won't be reused
+- Check logic is trivial (< 3 lines)
+- You need custom error responses per-route
+
+```python
+# Acceptable for simple one-off checks
+@app.get("/users/{user_id}/profile")
+async def get_profile(user_id: str, user: CurrentUser):
+    if user.user_id != user_id and not user.has_permission("admin:access"):
+        raise PermissionDeniedError("Can only access own profile")
+    return {"profile": {...}}
+```
+
+Use DECORATOR pattern (@protected, @permission_required) only when:
+- Team strongly prefers decorator style
+- Migrating from Flask and want familiar syntax
+- NOTE: Requires `auth_user=None` default - slightly awkward
+
+18.5 Anti-Patterns to Avoid
+---------------------------
+
+DON'T: Mix patterns inconsistently in the same codebase
+```python
+# BAD: Mixing styles makes code hard to follow
+@app.get("/route1")
+async def route1(user: CurrentUser):  # Dependency style
+    ...
+
+@app.get("/route2")
+@protected(auth)  # Decorator style
+async def route2(request: Request, auth_user=None):
+    ...
+```
+
+DON'T: Create check callbacks for simple permission checks
+```python
+# BAD: Unnecessary complexity
+def has_admin(user, request):
+    return user.has_permission("admin:access")
+
+# GOOD: Just use require_permission
+AdminUser = Annotated[AuthenticatedUser, Depends(require_permission(auth, "admin:access"))]
+```
+
+DON'T: Inline complex authorization in routes
+```python
+# BAD: Authorization logic buried in route
+@app.delete("/resources/{resource_id}")
+async def delete_resource(resource_id: str, user: CurrentUser):
+    # Complex auth logic here...
+    if not (user.user_id == get_owner(resource_id) or
+            user.has_permission("admin:access") or
+            user.org_id == get_resource_org(resource_id)):
+        raise PermissionDeniedError(...)
+    ...
+
+# GOOD: Extract to check callback
+def can_delete_resource(user, request):
+    resource_id = request.path_params.get("resource_id")
+    return (user.user_id == get_owner(resource_id) or
+            user.has_permission("admin:access"))
+
+ResourceDeleter = Annotated[AuthenticatedUser, Depends(require_auth(
+    auth, check=can_delete_resource, check_error="Cannot delete resource"
+))]
+```
+
+18.6 Summary: The ab0t Way
+--------------------------
+
+| Framework | Pattern                    | Auth Method                    |
+|-----------|----------------------------|--------------------------------|
+| FastAPI   | Annotated + Depends()      | require_auth/require_permission|
+| FastAPI   | Dynamic auth               | check= with reusable Annotated |
+| Flask     | @decorators                | @login_required/@permission_required |
+| Flask     | Dynamic auth               | check= parameter on decorators |
+
+GOLDEN RULE: Define authorization requirements ONCE as reusable types/dependencies,
+then use them consistently throughout your application.
+
+================================================================================
+SECTION 19: ADVANCED AUTHORIZATION (DYNAMIC CHECKS) - REFERENCE
+================================================================================
+
+This section provides complete reference documentation for check callbacks.
+For the recommended approach, see Section 18 above.
+
+19.1 When to Use Check Callbacks
 --------------------------------
 
 Use check callbacks when:
@@ -2038,7 +2230,7 @@ Use static permissions when:
 - No request context needed
 - Permission names fully describe access rules
 
-18.2 Check Callback Signatures
+19.2 Check Callback Signatures
 ------------------------------
 
 FastAPI (receives user AND request):
@@ -2063,7 +2255,7 @@ def my_check(user: AuthenticatedUser) -> bool:
     return user.org_id == tenant_id
 ```
 
-18.3 Single Check Callback (FastAPI Dependencies)
+19.3 Single Check Callback (FastAPI Dependencies)
 -------------------------------------------------
 
 ```python
@@ -2104,7 +2296,7 @@ async def admin_tenant_settings(
     return {"tenant_id": tenant_id, "settings": {...}}
 ```
 
-18.4 Reusable Dependencies
+19.4 Reusable Dependencies
 --------------------------
 
 ```python
@@ -2131,7 +2323,7 @@ async def get_billing(tenant_id: str, user: AuthenticatedUser = Depends(tenant_a
     ...
 ```
 
-18.5 Multiple Checks
+19.5 Multiple Checks
 --------------------
 
 Combine multiple checks with "all" (AND) or "any" (OR) mode:
@@ -2179,7 +2371,7 @@ async def premium_feature(
     return {"feature": "premium", "access": True}
 ```
 
-18.6 Check Callbacks with Decorators (FastAPI)
+19.6 Check Callbacks with Decorators (FastAPI)
 ----------------------------------------------
 
 ```python
@@ -2209,7 +2401,7 @@ async def class_domain_service(request: Request, domain: str, auth_user=None):
 # to avoid FastAPI interpreting it as request body
 ```
 
-18.7 Check Callbacks with Flask Decorators
+19.7 Check Callbacks with Flask Decorators
 ------------------------------------------
 
 ```python
@@ -2270,7 +2462,7 @@ def delete_resource(resource_id):
     return jsonify({"deleted": resource_id, "by": user.user_id})
 ```
 
-18.8 Alternative: Manual Check in Route
+19.8 Alternative: Manual Check in Route
 ---------------------------------------
 
 For simple, one-off checks, you can check manually in the route:
@@ -2310,7 +2502,7 @@ def manual_domain_check(domain):
     return jsonify({"registered": True, "domain": domain})
 ```
 
-18.9 Check Callback Parameter Reference
+19.9 Check Callback Parameter Reference
 ---------------------------------------
 
 All auth functions support these parameters:
@@ -2330,7 +2522,7 @@ Short-circuit evaluation:
 - "any" mode: Returns immediately when first check passes
 - "all" mode: Returns immediately when first check fails
 
-18.10 When to Use Which Approach
+19.10 When to Use Which Approach
 --------------------------------
 
 | Scenario                          | Recommended Approach           |
