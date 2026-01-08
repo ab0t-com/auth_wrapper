@@ -9,6 +9,8 @@ Status: OPEN
 Labels: None
 Type: Feature Request
 
+RECOMMENDATION: WONTFIX - Use existing API (see 02-analysis-existing-solutions.txt)
+
 ================================================================================
 ISSUE SUMMARY
 ================================================================================
