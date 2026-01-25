@@ -242,6 +242,184 @@ def get_content():
 
 
 # =============================================================================
+# Advanced Authorization (Check Callbacks)
+# =============================================================================
+
+# Flask check callbacks receive only the user (request is global).
+# Access flask.request for path params, headers, etc.
+
+from flask import request
+
+
+def can_access_tenant(user):
+    """Check if user belongs to the requested tenant."""
+    tenant_id = request.view_args.get("tenant_id")
+    return user.org_id == tenant_id or user.has_permission("admin:cross_tenant")
+
+
+def can_access_domain(user):
+    """Check if user can access the requested domain scope."""
+    domain = request.view_args.get("domain", "")
+    scope = domain.split('.')[0]  # e.g., "public" from "public.example.com"
+
+    return user.has_any_permission(
+        f"controller.write.services_{scope}",
+        "controller.write.services_all",
+        "controller.admin",
+    )
+
+
+@app.route("/tenants/<tenant_id>/data")
+@login_required(check=can_access_tenant, check_error="Tenant access denied")
+def get_tenant_data(tenant_id):
+    """
+    Tenant-scoped data - uses check callback to verify tenant membership.
+
+    The check callback automatically verifies the user belongs to this tenant
+    or has cross-tenant admin permission.
+    """
+    user = get_current_user()
+    return jsonify({
+        "tenant_id": tenant_id,
+        "user_org": user.org_id,
+        "data": {"example": "tenant-specific data"},
+    })
+
+
+@app.route("/<domain>/services", methods=["POST"])
+@login_required(check=can_access_domain, check_error="Domain access denied")
+def register_domain_service(domain):
+    """
+    Domain-scoped service registration.
+
+    Uses check callback to verify user has permission for this domain scope.
+    For example:
+    - User with 'controller.write.services_public' can access public.example.com
+    - User with 'controller.write.services_all' can access any domain
+    - User with 'controller.admin' can access any domain
+    """
+    user = get_current_user()
+    return jsonify({
+        "registered": True,
+        "domain": domain,
+        "scope": domain.split('.')[0],
+        "by_user": user.user_id,
+    })
+
+
+@app.route("/<domain>/services/<service_id>", methods=["DELETE"])
+@login_required(check=can_access_domain, check_error="Domain access denied")
+def delete_domain_service(domain, service_id):
+    """Delete service - reuses same domain access check."""
+    user = get_current_user()
+    return jsonify({
+        "deleted": service_id,
+        "domain": domain,
+        "by_user": user.user_id,
+    })
+
+
+# Multiple checks with "any" mode (owner OR admin can delete)
+def is_resource_owner(user):
+    """Check if user owns the resource (simplified)."""
+    resource_id = request.view_args.get("resource_id")
+    # In real app: check database for ownership
+    return resource_id.startswith(user.user_id[:4])
+
+
+def is_admin_user(user):
+    """Check if user is an admin."""
+    return user.has_permission("admin:access")
+
+
+@app.route("/resources/<resource_id>", methods=["DELETE"])
+@login_required(
+    checks=[is_resource_owner, is_admin_user],
+    check_mode="any",  # Owner OR admin can delete
+    check_error="Must be owner or admin to delete",
+)
+def delete_resource(resource_id):
+    """Delete resource - owner OR admin can delete."""
+    user = get_current_user()
+    return jsonify({
+        "deleted": resource_id,
+        "by_user": user.user_id,
+    })
+
+
+# Multiple checks with "all" mode
+def is_verified(user):
+    """Check if user is verified."""
+    return user.metadata.get("email_verified", True)
+
+
+def has_premium(user):
+    """Check if user has premium subscription."""
+    return user.has_permission("premium:access")
+
+
+@app.route("/premium/features", methods=["POST"])
+@login_required(
+    checks=[is_verified, has_premium],
+    check_mode="all",  # Both must pass
+    check_error="Premium subscription with verified account required",
+)
+def premium_feature():
+    """Premium feature - requires verified account AND premium subscription."""
+    user = get_current_user()
+    return jsonify({
+        "feature": "premium",
+        "user": user.user_id,
+        "access_granted": True,
+    })
+
+
+# Permission decorator with check callback
+@app.route("/admin/tenants/<tenant_id>/settings")
+@permission_required("admin:settings", check=can_access_tenant, check_error="Tenant access denied")
+def admin_tenant_settings(tenant_id):
+    """Admin settings for tenant - requires admin permission AND tenant access."""
+    user = get_current_user()
+    return jsonify({
+        "tenant_id": tenant_id,
+        "settings": {"theme": "dark"},
+        "admin_user": user.user_id,
+    })
+
+
+# =============================================================================
+# Alternative: Manual Check in Route (Simple Cases)
+# =============================================================================
+
+@app.route("/manual/<domain>/services", methods=["POST"])
+@login_required()
+def manual_domain_check(domain):
+    """
+    Alternative approach: manual permission check in route.
+
+    Use this for simple, one-off checks. Use check callbacks for
+    reusable logic across multiple routes.
+    """
+    from flask import abort
+
+    user = get_current_user()
+    scope = domain.split('.')[0]
+
+    if not user.has_any_permission(
+        f"controller.write.services_{scope}",
+        "controller.write.services_all",
+        "controller.admin",
+    ):
+        abort(403, description=f"Not authorized for domain scope: {scope}")
+
+    return jsonify({
+        "registered": True,
+        "domain": domain,
+        "approach": "manual_check",
+    })
+
+
+# =============================================================================
 # Main
 # =============================================================================
 

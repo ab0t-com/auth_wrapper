@@ -7,12 +7,22 @@ Follow FastAPI patterns - return callables that work with Depends().
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Callable
+import asyncio
+from typing import Annotated, Any, Callable, Literal, Sequence
 
 from fastapi import Depends, Header, Request
 
-from ab0t_auth.core import AuthenticatedUser
-from ab0t_auth.errors import PermissionDeniedError, TokenNotFoundError
+from ab0t_auth.core import (
+    AuthCheckCallable,
+    AuthenticatedUser,
+)
+from ab0t_auth.errors import (
+    InsufficientScopeError,
+    PermissionDeniedError,
+    TokenExpiredError,
+    TokenInvalidError,
+    TokenNotFoundError,
+)
 from ab0t_auth.guard import AuthGuard
 from ab0t_auth.permissions import (
     check_all_permissions,
@@ -32,6 +42,94 @@ ApiKeyHeader = Annotated[str | None, Header(alias="X-API-Key")]
 
 
 # =============================================================================
+# Auth Check Helper
+# =============================================================================
+
+import logging
+
+_logger = logging.getLogger("ab0t_auth.dependencies")
+
+
+def _validate_check_result(result: Any, callback_name: str) -> bool:
+    """
+    Validate and normalize check callback result to bool.
+
+    Logs warning for non-bool returns and treats them as failure (safe default).
+    """
+    if isinstance(result, bool):
+        return result
+
+    _logger.warning(
+        "Check callback '%s' returned non-bool type '%s', treating as False. "
+        "Check callbacks must return bool for security.",
+        callback_name,
+        type(result).__name__,
+    )
+    return False
+
+
+async def _run_auth_checks(
+    user: AuthenticatedUser,
+    request: Request,
+    check: AuthCheckCallable | None,
+    checks: Sequence[AuthCheckCallable] | None,
+    check_mode: Literal["all", "any"],
+    check_error: str,
+) -> None:
+    """
+    Run authorization checks and raise PermissionDeniedError on failure.
+
+    Supports both sync and async check functions.
+
+    Security features:
+    - Validates callback returns bool (non-bool treated as False)
+    - Catches exceptions from callbacks (treated as failure)
+    - Logs warnings for debugging
+    """
+    all_checks: list[AuthCheckCallable] = []
+
+    if check is not None:
+        all_checks.append(check)
+    if checks is not None:
+        all_checks.extend(checks)
+
+    if not all_checks:
+        return  # No checks to run
+
+    for check_fn in all_checks:
+        callback_name = getattr(check_fn, "__name__", repr(check_fn))
+
+        # Execute callback with exception handling
+        try:
+            if asyncio.iscoroutinefunction(check_fn):
+                raw_result = await check_fn(user, request)
+            else:
+                raw_result = check_fn(user, request)
+        except Exception as e:
+            _logger.warning(
+                "Check callback '%s' raised exception: %s. Treating as False.",
+                callback_name,
+                str(e),
+            )
+            raw_result = False
+
+        # Validate return type (non-bool is treated as False)
+        result = _validate_check_result(raw_result, callback_name)
+
+        # Short-circuit for "any" mode on success
+        if check_mode == "any" and result:
+            return
+
+        # Short-circuit for "all" mode on failure
+        if check_mode == "all" and not result:
+            raise PermissionDeniedError(check_error)
+
+    # Final check for "any" mode - none passed
+    if check_mode == "any":
+        raise PermissionDeniedError(check_error)
+
+
+# =============================================================================
 # Dependency Factory Functions
 # =============================================================================
 
@@ -40,6 +138,10 @@ def require_auth(
     guard: AuthGuard,
     *,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires authentication.
@@ -47,22 +149,48 @@ def require_auth(
     Factory function returning FastAPI dependency.
     Raises TokenNotFoundError if not authenticated.
 
-    Example:
-        auth = AuthGuard(...)
+    Args:
+        guard: AuthGuard instance
+        allow_api_key: Whether to accept API key authentication
+        check: Single authorization check callback (optional)
+        checks: List of authorization check callbacks (optional)
+        check_mode: "all" requires all checks pass, "any" requires one
+        check_error: Error message when check fails
 
-        @app.get("/protected")
-        async def protected(
-            user: AuthenticatedUser = Depends(require_auth(auth))
-        ):
-            return {"user_id": user.user_id}
+    The check callback signature:
+        def my_check(user: AuthenticatedUser, request: Request) -> bool:
+            # Return True to allow, False to deny
+
+    Examples:
+        # Simple auth only
+        require_auth(auth)
+
+        # With single check
+        def can_access_domain(user, request):
+            domain = request.path_params.get("domain")
+            return user.has_permission(f"domain:{domain}:access")
+
+        require_auth(auth, check=can_access_domain)
+
+        # With multiple checks (all must pass)
+        require_auth(auth, checks=[is_active, has_subscription])
+
+        # With multiple checks (any can pass)
+        require_auth(auth, checks=[is_admin, is_owner], check_mode="any")
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
         api_key = x_api_key if allow_api_key else None
-        return await guard.authenticate_or_raise(authorization, api_key)
+        user = await guard.authenticate_or_raise(authorization, api_key)
+
+        # Run authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
+
+        return user
 
     return dependency
 
@@ -72,12 +200,17 @@ def require_permission(
     permission: str,
     *,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires specific permission.
 
     Factory function returning FastAPI dependency.
     Raises PermissionDeniedError if permission not granted.
+    Additional checks run AFTER permission check.
 
     Example:
         @app.delete("/users/{id}")
@@ -89,6 +222,7 @@ def require_permission(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -103,6 +237,9 @@ def require_permission(
                 user_permissions=list(user.permissions),
             )
 
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
+
         return user
 
     return dependency
@@ -112,11 +249,16 @@ def require_any_permission(
     guard: AuthGuard,
     *permissions: str,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires any of the specified permissions.
 
     Factory function returning FastAPI dependency.
+    Additional checks run AFTER permission check.
 
     Example:
         @app.get("/reports")
@@ -129,6 +271,7 @@ def require_any_permission(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -143,6 +286,9 @@ def require_any_permission(
                 user_permissions=list(user.permissions),
             )
 
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
+
         return user
 
     return dependency
@@ -152,11 +298,16 @@ def require_all_permissions(
     guard: AuthGuard,
     *permissions: str,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires all specified permissions.
 
     Factory function returning FastAPI dependency.
+    Additional checks run AFTER permission check.
 
     Example:
         @app.post("/sensitive-operation")
@@ -169,6 +320,7 @@ def require_all_permissions(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -183,6 +335,9 @@ def require_all_permissions(
                 user_permissions=list(user.permissions),
             )
 
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
+
         return user
 
     return dependency
@@ -193,11 +348,16 @@ def require_permission_pattern(
     pattern: str,
     *,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires permission matching pattern.
 
     Supports glob patterns like "admin:*", "users:*:read".
+    Additional checks run AFTER permission check.
 
     Example:
         @app.get("/admin/dashboard")
@@ -210,6 +370,7 @@ def require_permission_pattern(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -224,6 +385,9 @@ def require_permission_pattern(
                 user_permissions=list(user.permissions),
             )
 
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
+
         return user
 
     return dependency
@@ -233,11 +397,26 @@ def optional_auth(
     guard: AuthGuard,
     *,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
 ) -> Callable[..., Any]:
     """
     Create dependency that optionally authenticates.
 
-    Returns None if not authenticated (no error raised).
+    Returns None if:
+    - No credentials provided
+    - Token is invalid/expired (expected auth failures)
+    - Authorization checks fail
+
+    Raises (does NOT return None) for:
+    - Auth service unavailable (503)
+    - JWKS fetch errors (503)
+    - Configuration errors (500)
+    - Unexpected exceptions
+
+    This ensures service problems are visible rather than silently
+    treated as "unauthenticated".
 
     Example:
         @app.get("/content")
@@ -250,6 +429,7 @@ def optional_auth(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser | None:
@@ -257,9 +437,23 @@ def optional_auth(
             return None
 
         api_key = x_api_key if allow_api_key else None
-        result = await guard.authenticate(authorization, api_key)
 
-        return result.user if result.success else None
+        try:
+            user = await guard.authenticate_or_raise(authorization, api_key)
+        except (TokenInvalidError, TokenExpiredError, TokenNotFoundError, InsufficientScopeError):
+            # Expected auth failures - treat as unauthenticated
+            return None
+        # Let other exceptions propagate (AuthServiceError, JWKSFetchError, etc.)
+
+        # Run checks if provided; return None on failure (don't raise)
+        try:
+            await _run_auth_checks(
+                user, request, check, checks, check_mode, "Check failed"
+            )
+        except PermissionDeniedError:
+            return None
+
+        return user
 
     return dependency
 
@@ -268,6 +462,10 @@ def get_current_user(
     guard: AuthGuard,
     *,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Alias for require_auth - semantic naming.
@@ -279,7 +477,14 @@ def get_current_user(
         async def get_me(user: CurrentUser):
             return {"user_id": user.user_id}
     """
-    return require_auth(guard, allow_api_key=allow_api_key)
+    return require_auth(
+        guard,
+        allow_api_key=allow_api_key,
+        check=check,
+        checks=checks,
+        check_mode=check_mode,
+        check_error=check_error,
+    )
 
 
 # =============================================================================
@@ -340,9 +545,14 @@ def require_role(
     role: str,
     *,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires specific role.
+    Additional checks run AFTER role check.
 
     Example:
         @app.get("/admin")
@@ -353,6 +563,7 @@ def require_role(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -365,6 +576,9 @@ def require_role(
                 required_permission=f"role:{role}",
             )
 
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
+
         return user
 
     return dependency
@@ -374,9 +588,14 @@ def require_any_role(
     guard: AuthGuard,
     *roles: str,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires any of the specified roles.
+    Additional checks run AFTER role check.
 
     Example:
         @app.get("/staff")
@@ -389,6 +608,7 @@ def require_any_role(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -400,6 +620,9 @@ def require_any_role(
                 f"One of roles required: {', '.join(roles)}",
                 required_permission=f"roles:{','.join(roles)}",
             )
+
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
 
         return user
 
@@ -415,11 +638,16 @@ def require_org_membership(
     guard: AuthGuard,
     *,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires organization membership.
 
     Validates that user belongs to an organization.
+    Additional checks run AFTER org check.
 
     Example:
         @app.get("/org/settings")
@@ -430,6 +658,7 @@ def require_org_membership(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -442,6 +671,9 @@ def require_org_membership(
                 required_permission="org:member",
             )
 
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
+
         return user
 
     return dependency
@@ -452,9 +684,14 @@ def require_org(
     org_id: str,
     *,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create dependency that requires specific organization.
+    Additional checks run AFTER org check.
 
     Example:
         @app.get("/org/acme/data")
@@ -465,6 +702,7 @@ def require_org(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -476,6 +714,9 @@ def require_org(
                 f"Organization '{org_id}' membership required",
                 required_permission=f"org:{org_id}",
             )
+
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
 
         return user
 
@@ -493,11 +734,16 @@ def require_auth_and_permission(
     *,
     require_org: bool = False,
     allow_api_key: bool = True,
+    check: AuthCheckCallable | None = None,
+    checks: Sequence[AuthCheckCallable] | None = None,
+    check_mode: Literal["all", "any"] = "all",
+    check_error: str = "Authorization check failed",
 ) -> Callable[..., Any]:
     """
     Create composite dependency with multiple requirements.
 
     Combines authentication, permission, and optional org check.
+    Additional checks run AFTER all other checks.
 
     Example:
         @app.post("/org/billing")
@@ -512,6 +758,7 @@ def require_auth_and_permission(
     """
 
     async def dependency(
+        request: Request,
         authorization: AuthorizationHeader = None,
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
@@ -533,6 +780,9 @@ def require_auth_and_permission(
                 required_permission=permission,
                 user_permissions=list(user.permissions),
             )
+
+        # Run additional authorization checks if provided
+        await _run_auth_checks(user, request, check, checks, check_mode, check_error)
 
         return user
 
