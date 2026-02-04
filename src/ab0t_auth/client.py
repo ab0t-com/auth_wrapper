@@ -170,9 +170,11 @@ async def validate_token(
     Server-side validation - authoritative check.
     """
     try:
+        # Token may already include "Bearer " prefix from the Authorization header
+        auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
         response = await client.post(
             f"{config.auth_url}/auth/validate",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": auth_header},
         )
         response.raise_for_status()
         data = response.json()
@@ -277,10 +279,12 @@ async def check_permission(
         payload["resource_type"] = request.resource_type
 
     try:
+        # Token may already include "Bearer " prefix from the Authorization header
+        auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
         response = await client.post(
             f"{config.auth_url}/permissions/check",
             json=payload,
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": auth_header},
         )
         response.raise_for_status()
         data = response.json()
@@ -322,9 +326,11 @@ async def get_user_permissions(
     Pure async function returning immutable tuple.
     """
     try:
+        # Token may already include "Bearer " prefix from the Authorization header
+        auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
         response = await client.get(
             f"{config.auth_url}/permissions/user/{user_id}",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": auth_header},
         )
         response.raise_for_status()
         data = response.json()
