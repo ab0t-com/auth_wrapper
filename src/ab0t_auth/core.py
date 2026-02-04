@@ -183,6 +183,10 @@ class AuthConfig:
     enable_api_key_auth: bool = True
     enable_jwt_auth: bool = True
     debug: bool = False
+    # Permission verification mode:
+    # - "client": Check JWT claims only (default, fast)
+    # - "server": Call /permissions/check endpoint (authoritative, real-time)
+    permission_check_mode: Literal["client", "server"] = "client"
 
 
 # =============================================================================

@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -178,6 +178,12 @@ class AuthSettings(BaseSettings):
         description="Enable debug logging",
     )
 
+    # Permission verification mode
+    permission_check_mode: Literal["client", "server"] = Field(
+        default="client",
+        description="Permission check mode: 'client' (JWT claims) or 'server' (API call)",
+    )
+
     @field_validator("auth_url")
     @classmethod
     def validate_auth_url(cls, v: str) -> str:
@@ -233,6 +239,7 @@ def settings_to_config(settings: AuthSettings) -> AuthConfig:
         enable_api_key_auth=settings.enable_api_key_auth,
         enable_jwt_auth=settings.enable_jwt_auth,
         debug=settings.debug,
+        permission_check_mode=settings.permission_check_mode,
     )
 
 
@@ -247,6 +254,7 @@ def create_config(
     token_cache_ttl: int = 60,
     verify_exp: bool = True,
     debug: bool = False,
+    permission_check_mode: Literal["client", "server"] = "client",
     **kwargs: Any,
 ) -> AuthConfig:
     """
@@ -264,6 +272,7 @@ def create_config(
         token_cache_ttl=token_cache_ttl,
         verify_exp=verify_exp,
         debug=debug,
+        permission_check_mode=permission_check_mode,
         **kwargs,
     )
 

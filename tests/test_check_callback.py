@@ -69,6 +69,9 @@ def mock_guard(test_user: AuthenticatedUser):
     guard.config = MagicMock()
     guard.config.api_key_header = "X-API-Key"
     guard.config.header_name = "Authorization"
+    # For server-side permission checking mode support
+    guard._config = MagicMock()
+    guard._config.permission_check_mode = "client"
 
     async def mock_authenticate(auth, api_key):
         from ab0t_auth.core import AuthResult

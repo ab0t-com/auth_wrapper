@@ -29,6 +29,9 @@ from ab0t_auth.permissions import (
     check_any_permission,
     check_permission,
     check_permission_pattern,
+    verify_all_permissions,
+    verify_any_permission,
+    verify_permission,
 )
 
 
@@ -229,7 +232,21 @@ def require_permission(
         api_key = x_api_key if allow_api_key else None
         user = await guard.authenticate_or_raise(authorization, api_key)
 
-        result = check_permission(user, permission)
+        # Check permission based on configured mode
+        if guard._config.permission_check_mode == "server":
+            # Server-side authoritative check via /permissions/check
+            result = await verify_permission(
+                guard._http_client,
+                guard._config,
+                authorization or "",  # Token for auth header
+                user,
+                permission,
+                cache=guard._permission_cache,
+            )
+        else:
+            # Client-side check from JWT claims (default)
+            result = check_permission(user, permission)
+
         if not result.allowed:
             raise PermissionDeniedError(
                 result.reason or f"Permission '{permission}' required",
@@ -278,7 +295,21 @@ def require_any_permission(
         api_key = x_api_key if allow_api_key else None
         user = await guard.authenticate_or_raise(authorization, api_key)
 
-        result = check_any_permission(user, *permissions)
+        # Check permission based on configured mode
+        if guard._config.permission_check_mode == "server":
+            # Server-side authoritative check
+            result = await verify_any_permission(
+                guard._http_client,
+                guard._config,
+                authorization or "",
+                user,
+                *permissions,
+                cache=guard._permission_cache,
+            )
+        else:
+            # Client-side check from JWT claims (default)
+            result = check_any_permission(user, *permissions)
+
         if not result.allowed:
             raise PermissionDeniedError(
                 result.reason or f"One of permissions required: {', '.join(permissions)}",
@@ -327,7 +358,21 @@ def require_all_permissions(
         api_key = x_api_key if allow_api_key else None
         user = await guard.authenticate_or_raise(authorization, api_key)
 
-        result = check_all_permissions(user, *permissions)
+        # Check permission based on configured mode
+        if guard._config.permission_check_mode == "server":
+            # Server-side authoritative check
+            result = await verify_all_permissions(
+                guard._http_client,
+                guard._config,
+                authorization or "",
+                user,
+                *permissions,
+                cache=guard._permission_cache,
+            )
+        else:
+            # Client-side check from JWT claims (default)
+            result = check_all_permissions(user, *permissions)
+
         if not result.allowed:
             raise PermissionDeniedError(
                 result.reason or f"All permissions required: {', '.join(permissions)}",

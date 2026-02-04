@@ -8,7 +8,7 @@ Similar to slowapi's Limiter - provides the main interface for the library.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 import httpx
 from jwt import PyJWKClient
@@ -91,6 +91,7 @@ class AuthGuard:
         audience: str | tuple[str, ...] | None = None,
         issuer: str | None = None,
         debug: bool = False,
+        permission_check_mode: Literal["client", "server"] = "client",
     ) -> None:
         """
         Initialize AuthGuard.
@@ -116,6 +117,7 @@ class AuthGuard:
                 audience=audience,
                 issuer=issuer,
                 debug=debug,
+                permission_check_mode=permission_check_mode,
             )
         else:
             raise ConfigurationError(
