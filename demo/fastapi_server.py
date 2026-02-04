@@ -37,6 +37,14 @@ from ab0t_auth.decorators import (
 AUTH_URL = "https://auth.service.ab0t.com"  # Replace with your Ab0t auth URL
 
 # Initialize auth guard
+# NOTE: For production with auth.service.ab0t.com, use permission_check_mode="server"
+# This enables real-time permission verification via /permissions/check endpoint,
+# supporting instant permission revocation without waiting for JWT expiry.
+#
+# Set via env var: AB0T_AUTH_PERMISSION_CHECK_MODE=server
+# Or programmatically:
+#   auth = AuthGuard(auth_url=AUTH_URL, permission_check_mode="server")
+#
 auth = AuthGuard(auth_url=AUTH_URL)
 
 

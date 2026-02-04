@@ -386,6 +386,7 @@ AB0T_AUTH_AUTH_URL=https://auth.dev.ab0t.com
 
 # Production
 AB0T_AUTH_AUTH_URL=https://auth.service.ab0t.com
+AB0T_AUTH_PERMISSION_CHECK_MODE=server  # Recommended for production
 AB0T_AUTH_DEBUG=false
 ```
 
@@ -395,16 +396,43 @@ Local JWT validation means you keep running. We cache JWKS keys, so even if Ab0t
 
 ### "Can I check permissions without blocking?"
 
-Yes! Client-side checks use token claims (instant). Server-side checks call Ab0t (authoritative).
+Yes! You can choose between client-side (instant) and server-side (authoritative) checks.
 
 ```python
-# Instant (from token)
+# Instant (from JWT claims)
 if user.has_permission("admin:access"):
     ...
 
-# Authoritative (API call)
+# Authoritative (API call to /permissions/check)
 result = await verify_permission(client, config, token, user, "sensitive:action")
 ```
+
+### "Should I use client or server mode for permission checks?"
+
+**Server mode is recommended** for services using `auth.service.ab0t.com`.
+
+The Ab0t auth service intentionally stores permissions in the database (not in JWT tokens) to support:
+- **Instant revocation** - Permissions removed immediately, no waiting for token expiry
+- **Dynamic org scoping** - Permissions vary by organization context
+- **Role-based inheritance** - Roles expand to permissions at check time
+
+```bash
+# Enable server-side permission checking (recommended)
+AB0T_AUTH_PERMISSION_CHECK_MODE=server
+```
+
+```python
+# Or programmatically
+auth = AuthGuard(
+    auth_url="https://auth.service.ab0t.com",
+    permission_check_mode="server",  # Calls /permissions/check endpoint
+)
+```
+
+| Mode | Speed | Use Case |
+|------|-------|----------|
+| `client` (default) | Instant | Offline validation, cached permissions in JWT |
+| `server` | ~5-10ms | Real-time permissions, instant revocation support |
 
 ### "Is this production-ready?"
 

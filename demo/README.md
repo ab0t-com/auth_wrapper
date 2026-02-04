@@ -35,10 +35,15 @@ Edit the `AUTH_URL` in either server file to point to your Ab0t auth service:
 AUTH_URL = "https://auth.service.ab0t.com"  # Your Ab0t auth URL
 ```
 
-Or set via environment variable:
+Or set via environment variables:
 
 ```bash
 export AB0T_AUTH_URL="https://auth.service.ab0t.com"
+
+# Recommended: Enable server-side permission checking
+# This calls /permissions/check for authoritative verification
+# Supports instant permission revocation without waiting for JWT expiry
+export AB0T_AUTH_PERMISSION_CHECK_MODE="server"
 ```
 
 ---
