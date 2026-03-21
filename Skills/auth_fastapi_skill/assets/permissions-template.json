@@ -1,0 +1,347 @@
+{
+  "$schema": "https://auth.service.ab0t.com/schemas/permissions/v2",
+  "service": {
+    "id": "resource",
+    "name": "Resource Service",
+    "description": "Multi-cloud compute resource allocation and management service",
+    "version": "1.0.0",
+    "audience": "resource-service",
+    "maintainer": "platform-team@ab0t.com"
+  },
+  "registration": {
+    "service": "resource",
+    "actions": [
+      "read",
+      "write",
+      "create",
+      "delete",
+      "scale",
+      "execute",
+      "admin",
+      "ssh",
+      "logs",
+      "metrics",
+      "cross_tenant"
+    ],
+    "resources": [
+      "allocations",
+      "instances",
+      "deployments",
+      "containers",
+      "workflows",
+      "costs",
+      "quotas",
+      "pools",
+      "config",
+      "health"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "resource.create.allocations",
+      "name": "Create Allocations",
+      "description": "Allows user to allocate new compute resources",
+      "intent": "Users need this permission to provision new compute resources. Each allocation consumes cloud resources and incurs costs.",
+      "risk_level": "medium",
+      "cost_impact": true,
+      "default_grant": true
+    },
+    {
+      "id": "resource.create.deployments",
+      "name": "Create Deployments",
+      "description": "Allows user to create new deployments (EC2, Fargate, Lambda, etc.)",
+      "intent": "Users need this to deploy resources via various engines.",
+      "risk_level": "medium",
+      "cost_impact": true,
+      "default_grant": true
+    },
+    {
+      "id": "resource.read",
+      "name": "Read All Resources",
+      "description": "Allows user to view their own resource allocations, instances, and status",
+      "intent": "Basic read access to resource information. Required for dashboard access.",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "resource.write",
+      "name": "Modify Resources",
+      "description": "Allows user to start, stop, and modify their own resources",
+      "intent": "Enables resource lifecycle management (start/stop). Stopping resources reduces costs.",
+      "risk_level": "medium",
+      "cost_impact": true,
+      "default_grant": true
+    },
+    {
+      "id": "resource.scale",
+      "name": "Scale Resources",
+      "description": "Allows user to scale their resource allocations up or down",
+      "intent": "Enables adjusting resource capacity. Scaling affects costs.",
+      "risk_level": "medium",
+      "cost_impact": true,
+      "default_grant": true
+    },
+    {
+      "id": "resource.delete",
+      "name": "Delete Resources",
+      "description": "Allows user to permanently terminate their own resource allocations",
+      "intent": "Enables permanent removal of compute resources. Termination is irreversible.",
+      "risk_level": "high",
+      "cost_impact": true,
+      "default_grant": true,
+      "security_notes": "Termination stops billing but data cannot be recovered."
+    },
+    {
+      "id": "resource.execute.instances",
+      "name": "Execute in Instances",
+      "description": "Allows user to execute commands within their allocated compute environments",
+      "intent": "Enables running arbitrary commands inside containers/VMs.",
+      "risk_level": "high",
+      "cost_impact": false,
+      "default_grant": true,
+      "security_notes": "Commands are isolated within allocated container/VM."
+    },
+    {
+      "id": "resource.execute.containers",
+      "name": "Execute in Containers",
+      "description": "Allows user to execute commands within containers",
+      "intent": "Enables running commands inside containers.",
+      "risk_level": "high",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "resource.ssh.instances",
+      "name": "SSH Access",
+      "description": "Allows user to SSH or console into their compute instances",
+      "intent": "Enables direct shell access to VMs and containers for debugging.",
+      "risk_level": "high",
+      "cost_impact": false,
+      "default_grant": false,
+      "security_notes": "SSH access is logged. Consider using execute for non-interactive commands."
+    },
+    {
+      "id": "resource.logs",
+      "name": "View Logs",
+      "description": "Allows user to view logs from their compute resources",
+      "intent": "Enables viewing container logs, system logs, and application output.",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "resource.metrics",
+      "name": "View Metrics",
+      "description": "Allows user to view metrics and monitoring data from their resources",
+      "intent": "Enables viewing CPU, memory, network, and custom metrics.",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "resource.read.costs",
+      "name": "Read Costs",
+      "description": "Allows user to view their own cost reports and usage statistics",
+      "intent": "Enables users to monitor their personal spending and resource usage.",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "resource.admin.costs",
+      "name": "Cost Administrator",
+      "description": "Full administrative access to organization-wide cost data and budgets",
+      "intent": "Org-level billing admin. View all user costs, set budgets, access org-wide reports.",
+      "risk_level": "high",
+      "cost_impact": true,
+      "default_grant": false,
+      "implies": ["resource.read.costs"]
+    },
+    {
+      "id": "resource.read.quotas",
+      "name": "Read Quotas",
+      "description": "Allows user to view their own quota limits and usage",
+      "intent": "Enables users to see their resource limits and current usage.",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "resource.admin.quotas",
+      "name": "Quota Administrator",
+      "description": "Allows management of quota limits for organization users",
+      "intent": "Org-level quota admin. Set and modify resource quotas for users.",
+      "risk_level": "high",
+      "cost_impact": true,
+      "default_grant": false,
+      "implies": ["resource.read.quotas"]
+    },
+    {
+      "id": "resource.read.workflows",
+      "name": "Read Workflows",
+      "description": "Allows user to view workflow definitions",
+      "intent": "Enables viewing deployment workflow configurations.",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "resource.create.workflows",
+      "name": "Create Workflows",
+      "description": "Allows user to create and upload deployment workflow definitions",
+      "intent": "Enables creating reusable deployment configurations.",
+      "risk_level": "medium",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "resource.execute.workflows",
+      "name": "Execute Workflows",
+      "description": "Allows user to execute deployment workflows",
+      "intent": "Enables running workflow-based deployments.",
+      "risk_level": "high",
+      "cost_impact": true,
+      "default_grant": true,
+      "security_notes": "Workflow execution may provision resources and incur costs."
+    },
+    {
+      "id": "resource.admin",
+      "name": "Resource Administrator",
+      "description": "Full administrative access to all resources within the organization",
+      "intent": "Org-level admin. View, modify, start, stop, scale, delete ANY resource in the org.",
+      "risk_level": "critical",
+      "cost_impact": true,
+      "default_grant": false,
+      "security_notes": "Admins can access all org resources but not other organizations.",
+      "implies": [
+        "resource.read",
+        "resource.write",
+        "resource.scale",
+        "resource.delete",
+        "resource.execute.instances",
+        "resource.execute.containers",
+        "resource.logs",
+        "resource.metrics",
+        "resource.create.allocations",
+        "resource.create.deployments",
+        "resource.read.costs",
+        "resource.read.quotas",
+        "resource.admin.costs",
+        "resource.admin.quotas"
+      ]
+    },
+    {
+      "id": "resource.read.config",
+      "name": "Read Platform Config",
+      "description": "Allows viewing platform configuration",
+      "intent": "Platform-level config access for ab0t staff.",
+      "risk_level": "high",
+      "cost_impact": false,
+      "default_grant": false
+    },
+    {
+      "id": "resource.admin.config",
+      "name": "Platform Administrator",
+      "description": "Platform-wide administrative access",
+      "intent": "Platform-level admin for ab0t staff. View system health, manage configurations.",
+      "risk_level": "critical",
+      "cost_impact": false,
+      "default_grant": false,
+      "security_notes": "Platform admins need cross_tenant for cross-org resource access."
+    },
+    {
+      "id": "resource.cross_tenant",
+      "name": "Cross-Tenant Access",
+      "description": "Allows access to resources across organization boundaries",
+      "intent": "Emergency support permission. Access resources in ANY organization.",
+      "risk_level": "critical",
+      "cost_impact": false,
+      "default_grant": false,
+      "security_notes": "All cross-tenant access is logged and audited. Grant only to senior support staff."
+    }
+  ],
+  "roles": [
+    {
+      "id": "resource-user",
+      "name": "Resource User",
+      "description": "Standard user with full access to their own resources",
+      "permissions": [
+        "resource.create.allocations",
+        "resource.create.deployments",
+        "resource.read",
+        "resource.write",
+        "resource.scale",
+        "resource.delete",
+        "resource.execute.instances",
+        "resource.execute.containers",
+        "resource.logs",
+        "resource.metrics",
+        "resource.read.costs",
+        "resource.read.quotas",
+        "resource.read.workflows",
+        "resource.create.workflows",
+        "resource.execute.workflows"
+      ],
+      "default": true
+    },
+    {
+      "id": "resource-viewer",
+      "name": "Resource Viewer",
+      "description": "Read-only access to resources (e.g., for auditors)",
+      "permissions": [
+        "resource.read",
+        "resource.logs",
+        "resource.metrics",
+        "resource.read.costs",
+        "resource.read.quotas"
+      ],
+      "default": false
+    },
+    {
+      "id": "resource-operator",
+      "name": "Resource Operator",
+      "description": "Can manage resources but not create new ones",
+      "permissions": [
+        "resource.read",
+        "resource.write",
+        "resource.scale",
+        "resource.execute.instances",
+        "resource.execute.containers",
+        "resource.ssh.instances",
+        "resource.logs",
+        "resource.metrics",
+        "resource.read.costs",
+        "resource.read.quotas"
+      ],
+      "default": false
+    },
+    {
+      "id": "resource-admin",
+      "name": "Resource Administrator",
+      "description": "Full admin access to all org resources and costs",
+      "permissions": [
+        "resource.admin"
+      ],
+      "default": false
+    },
+    {
+      "id": "platform-admin",
+      "name": "Platform Administrator",
+      "description": "Platform-wide admin with cross-tenant access (ab0t staff only)",
+      "permissions": [
+        "resource.admin",
+        "resource.admin.config",
+        "resource.cross_tenant"
+      ],
+      "default": false
+    }
+  ],
+  "multi_tenancy": {
+    "isolation_model": "organization",
+    "tenant_field": "org_id",
+    "enforcement": "strict",
+    "cross_tenant_permission": "resource.cross_tenant",
+    "notes": "Users can only access resources within their own organization. Cross-tenant access requires resource.cross_tenant and is fully audited."
+  }
+}

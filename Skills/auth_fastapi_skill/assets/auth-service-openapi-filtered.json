@@ -1,0 +1,2198 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Auth Service",
+    "description": "Multi-provider authentication and authorization service",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/.well-known/jwks.json": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Get Jwks",
+        "description": "Get public keys for JWT token validation (RFC 7517).\n\nInput: ?provider=internal|google|all, ?org_id=, ?refresh=true\nAuth: None required (public endpoint).\n\nUSE FOR: Resource servers validating JWT tokens.\n\nRETURNS: {keys:[{kty, kid, use, alg, n, e}], metadata:{...}}\n\nFILTERS:\n- No params: Internal keys only\n- provider=all: All provider keys (deprecated, use org_id)\n- org_id=X: Organization-specific keys (recommended)\n\nCACHED: 1 hour. Use refresh=true for immediate updates.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Org-specific keys\" -> GET /organizations/{org_id}/.well-known/jwks.json\n- \"OpenID discovery\" -> GET /.well-known/openid-configuration\n- \"JWKS health\" -> GET /.well-known/jwks.json/health",
+        "operationId": "get_jwks__well_known_jwks_json_get",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by provider (internal, google, microsoft, all)",
+              "title": "Provider"
+            },
+            "description": "Filter by provider (internal, google, microsoft, all)"
+          },
+          {
+            "name": "org_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Organization ID for org-specific JWKS",
+              "title": "Org Id"
+            },
+            "description": "Organization ID for org-specific JWKS"
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Force refresh of cached keys",
+              "default": false,
+              "title": "Refresh"
+            },
+            "description": "Force refresh of cached keys"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/jwks.json/health": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Jwks Health Check",
+        "description": "Real-time JWKS health status (not cached).\n\nInput: None\nAuth: None required (public endpoint).\n\nUSE FOR: Debugging token validation failures, monitoring key rotation.\n\nRETURNS: {status, jwks_enabled, active_keys, total_keys,\n          oldest_key_age_days, next_rotation, warnings:[]}\n\nSTATUS VALUES: healthy, warning, disabled, error\n\nRELATED ENDPOINTS BY INTENT:\n- \"Get public keys\" -> GET /.well-known/jwks.json\n- \"Admin key rotation\" -> GET /admin/jwks/rotation-status\n- \"Service health\" -> GET /health",
+        "operationId": "jwks_health_check__well_known_jwks_json_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api-keys/": {
+      "get": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Get Api Keys",
+        "description": "List API keys - your own keys, or all org keys if admin.\n\nInput: None\nAuth: Bearer token or API key required.\n\nVISIBILITY:\n- Regular users: see only their own keys\n- Org admins: see all keys in their organization\n- Super admins: see keys across their organizations\n\nRETURNS: [{key_id, name, permissions[], created_at, expires_at, last_used}]\nNOTE: Token value is NOT returned (only shown on creation).\n\nRELATED ENDPOINTS BY INTENT:\n- \"Create new key\" -> POST /api-keys/\n- \"Get specific key\" -> GET /api-keys/{key_id}\n- \"Revoke a key\" -> DELETE /api-keys/{key_id}",
+        "operationId": "get_api_keys_api_keys__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/APIKeyResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Get Api Keys Api Keys  Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Create Api Key",
+        "description": "Create API key for service-to-service auth.\n\nInput: {name, permissions?, rate_limit?, expires_at?, metadata?}\nAuth: Bearer token required. Key is created for current user's org.\n\nSCENARIOS:\n1. Basic key: {name:\"My Service\"} -> key with no specific permissions\n2. Scoped key: {name, permissions:[\"api.read\",\"api.write\"]} -> limited scope\n3. Rate-limited: {name, rate_limit:1000} -> 1000 req/hour limit\n4. Expiring key: {name, expires_at:\"2025-12-31T00:00:00Z\"} -> auto-expires\n\nRETURNS: {key_id, token} - SAVE THE TOKEN, it's only shown once!\n\nRELATED ENDPOINTS BY INTENT:\n- \"Validate an API key\" -> POST /auth/validate-api-key {api_key}\n- \"List my API keys\" -> GET /api-keys/\n- \"Revoke a key\" -> DELETE /api-keys/{key_id}\n- \"Use key for auth\" -> Header: X-API-Key: {token}",
+        "operationId": "create_api_key_api_keys__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIKeyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyWithToken"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api-keys/{key_id}": {
+      "get": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Get Api Key",
+        "description": "Get details of a specific API key.\n\nInput: key_id in path\nAuth: Bearer token required.\n\nRETURNS: {key_id, name, permissions[], created_at, expires_at, last_used, is_active}\nNOTE: Token value is NOT returned (only shown on creation).\n\nRELATED ENDPOINTS BY INTENT:\n- \"Update this key\" -> PUT /api-keys/{key_id}\n- \"Revoke this key\" -> DELETE /api-keys/{key_id}\n- \"List all my keys\" -> GET /api-keys/",
+        "operationId": "get_api_key_api_keys__key_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Update Api Key",
+        "description": "Update an API key's name, permissions, or status.\n\nInput: {name?, permissions?, rate_limit?, is_active?}\nAuth: Bearer token or API key required (must own key or be admin).\n\nCOMMON UPDATES:\n- Rename: {name:\"New Name\"}\n- Add permissions: {permissions:[\"api.read\",\"api.write\"]}\n- Disable temporarily: {is_active:false}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Revoke key instead\" -> DELETE /api-keys/{key_id}\n- \"Get current details\" -> GET /api-keys/{key_id}\n- \"Create new key\" -> POST /api-keys/",
+        "operationId": "update_api_key_api_keys__key_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIKeyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Delete Api Key",
+        "description": "Permanently revoke an API key.\n\nInput: key_id in path\nAuth: Bearer token or API key required (must own key or be admin).\n\nWARNING: This is permanent. The key will immediately stop working.\nAny services using this key will lose access.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Disable temporarily\" -> PUT /api-keys/{key_id} {is_active:false}\n- \"Create replacement key\" -> POST /api-keys/\n- \"List remaining keys\" -> GET /api-keys/",
+        "operationId": "delete_api_key_api_keys__key_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/check-permission": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Check Permission",
+        "description": "Check if user has specific permission",
+        "operationId": "check_permission_auth_check_permission_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Login",
+        "description": "Authenticate existing user and get access tokens.\n\nInput: {email, password, org_id?, provider_type?}\nReturns: {access_token, refresh_token, user: {id, email, org_id}}\n\nSCENARIOS:\n1. Single org user: {email, password} -> logs into default/personal org\n2. Multi-org user: {email, password, org_id} -> logs into specific org\n3. OAuth provider: {email, password, provider_type:\"google\"} -> provider auth\n\nRELATED ENDPOINTS BY INTENT:\n- \"I don't have an account\" -> POST /auth/register\n- \"I forgot my password\" -> POST /users/request-password-reset\n- \"I need to refresh my token\" -> POST /token/refresh\n- \"Which orgs can I access?\" -> GET /users/me/organizations (after login)",
+        "operationId": "login_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Get Current User Info",
+        "description": "Get current authenticated user info",
+        "operationId": "get_current_user_info_auth_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Refresh Token",
+        "description": "Get new access token using refresh token.\n\nInput: {refresh_token}\nAuth: None required (refresh_token authenticates the request).\n\nUSE WHEN: Access token expired (15min lifetime) but refresh token still valid.\nRETURNS: New {access_token, refresh_token, user, expires_in}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Token expired, need to login again\" -> POST /auth/login\n- \"Check if my token is still valid\" -> POST /auth/validate-token\n- \"Logout completely\" -> POST /auth/logout",
+        "operationId": "refresh_token_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Register",
+        "description": "Register new user with internal authentication.\n\nInput: {email, password, name, org_id?, invitation_code?}\nPassword: min 8 chars, uppercase, lowercase, digit, special. See GET /status\n\nREGISTRATION FLOWS:\n1. Individual (no org): {email, password, name} -> creates personal workspace\n2. Join org via invite: {email, password, name, org_id, invitation_code} -> joins existing org\n3. Join org (open): {email, password, name, org_id} -> if org allows open registration\n\nRELATED ENDPOINTS BY INTENT:\n- \"I want to create an account\" -> POST /auth/register (this endpoint)\n- \"I'm an admin, invite someone\" -> POST /organizations/{org_id}/invite\n- \"I have an account, need to login\" -> POST /auth/login\n- \"I want to create an organization\" -> POST /organizations/ (requires auth)\n- \"List my organizations\" -> GET /users/me/organizations (requires auth)",
+        "operationId": "register_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/switch-organization": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Switch Organization",
+        "description": "Switch to a different organization context.\n\nInput: {org_id}\nAuth: Bearer token required. Must be member of target org.\n\nUSE WHEN: User belongs to multiple orgs and wants to change active context.\nRETURNS: New {access_token, refresh_token} with org_id embedded.\n\nRELATED ENDPOINTS BY INTENT:\n- \"List my organizations\" -> GET /users/me/organizations\n- \"Check which org I'm in\" -> GET /users/me (see active_org_id)\n- \"Join a new organization\" -> POST /auth/register {org_id, invitation_code}\n- \"Create new organization\" -> POST /organizations/",
+        "operationId": "switch_organization_auth_switch_organization_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchOrganizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/auth/validate-api-key": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Validate Api Key",
+        "description": "Validate API key - for microservices to verify service-to-service auth.\n\nInput: {api_key, required_permissions?}\nAuth: None required (this IS the validation endpoint).\n\nSCENARIOS:\n1. Basic check: {api_key} -> returns {valid, user_id, org_id, permissions}\n2. Permission check: {api_key, required_permissions:[\"api.read\"]} -> also checks perms\n\nRETURNS: {valid:bool, user_id, org_id, permissions[], reason?}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Validate user JWT instead\" -> POST /auth/validate-token\n- \"Create new API key\" -> POST /api-keys/\n- \"List my API keys\" -> GET /api-keys/",
+        "operationId": "validate_api_key_auth_validate_api_key_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenValidationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/validate-token": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Validate Token",
+        "description": "Validate JWT token - for microservices to verify user tokens.\n\nInput: {token, required_permissions?, resource_type?, resource_id?}\nAuth: None required (this IS the validation endpoint).\n\nSCENARIOS:\n1. Basic check: {token} -> returns {valid, user_id, org_id, permissions}\n2. Permission check: {token, required_permissions:[\"api.read\"]} -> also checks perms\n3. Resource check: {token, resource_type:\"file\", resource_id:\"123\"} -> resource-level\n\nRETURNS: {valid:bool, user_id, org_id, permissions[], reason?}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Validate API key instead\" -> POST /auth/validate-api-key\n- \"Get new token\" -> POST /auth/refresh or POST /auth/login\n- \"Check specific permission\" -> POST /permissions/check",
+        "operationId": "validate_token_auth_validate_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenValidationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenValidationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health Check",
+        "description": "Quick service health check for load balancers and monitoring.\n\nInput: None\nAuth: None required (public endpoint).\n\nRETURNS: {status:\"healthy|degraded|unhealthy\", dependencies:{}, metrics:{}}\n\nUSE FOR: Kubernetes probes, load balancer health checks, basic monitoring.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Detailed config info\" -> GET /status\n- \"JWT key health\" -> GET /health/jwks\n- \"API documentation\" -> GET /docs",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/jwks": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Jwks Health",
+        "description": "Check JWT signing key health and availability.\n\nInput: None\nAuth: None required (public endpoint).\n\nRETURNS: {status, active_key_id, key_count, last_rotation}\n\nUSE FOR: Debugging token validation failures, monitoring key rotation.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Get public keys\" -> GET /.well-known/jwks.json\n- \"Emergency key recovery\" -> POST /health/jwks/recover (admin only)\n- \"Basic health\" -> GET /health",
+        "operationId": "jwks_health_health_jwks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Jwks Health Health Jwks Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/jwks/recover": {
+      "post": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Jwks Recover",
+        "description": "EMERGENCY: Recover JWT signing capability when no active key exists.\n\nInput: None\nAuth: NONE - Intentionally unprotected for bootstrap/recovery scenarios.\n      (If signing keys are broken, you can't authenticate to fix them.)\n\nPRODUCTION: Protect via network-level controls (internal-only access).\n\nUSE ONLY WHEN: Service cannot generate tokens due to missing/corrupted keys.\n\nBEHAVIOR:\n1. If active key exists -> Returns \"no_action_needed\" (safe, no changes)\n2. If keys exist but none active -> Activates newest key\n3. If no keys exist -> Generates and activates new key\n\nRETURNS: {status, message, active_key_id}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Normal key rotation (requires auth)\" -> POST /admin/jwks/rotate\n- \"JWKS health check\" -> GET /health/jwks\n- \"Key status\" -> GET /admin/jwks/rotation-status",
+        "operationId": "jwks_recover_health_jwks_recover_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Jwks Recover Health Jwks Recover Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/": {
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Create Organization",
+        "description": "Create a new organization. Requires authentication.\n\nInput: {name, slug?, billing_type?, domain?, parent_id?}\nAuth: Bearer token required. Creator becomes org admin.\n\nSCENARIOS:\n1. New team org: {name:\"My Team\"} -> creates org, you become admin\n2. Child org: {name, parent_id} -> creates sub-org under parent\n3. With billing: {name, billing_type:\"prepaid\"} -> sets billing tier\n\nQUOTA LIMITS:\n- Free tier: 1 org per user\n- Paid tiers: Higher limits (see GET /quotas/tiers)\n- Returns 429 if quota exceeded\n\nRELATED ENDPOINTS BY INTENT:\n- \"I want a personal account\" -> POST /auth/register (creates personal workspace)\n- \"Invite someone to my org\" -> POST /organizations/{org_id}/invite\n- \"List my organizations\" -> GET /users/me/organizations\n- \"Check my quota\" -> GET /quotas/my-usage",
+        "operationId": "create_organization_organizations__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/organizations/{org_id}": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get Organization",
+        "description": "Get organization details",
+        "operationId": "get_organization_organizations__org_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Update Organization",
+        "description": "Update organization",
+        "operationId": "update_organization_organizations__org_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/.well-known/jwks.json": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Get Org Jwks",
+        "description": "Get organization-specific public keys for token validation.\n\nInput: org_id in path, ?refresh=true\nAuth: None required (public endpoint).\n\nUSE FOR: Validating tokens in multi-tenant/auth mesh architectures.\n\nRETURNS: {keys:[...], metadata:{org_id, providers:[...]}}\n\nINCLUDES:\n- Organization's internal signing keys\n- Keys from all OAuth providers configured for this org\n\nRELATED ENDPOINTS BY INTENT:\n- \"Global JWKS\" -> GET /.well-known/jwks.json\n- \"OpenID discovery\" -> GET /.well-known/openid-configuration\n- \"Org's configured providers\" -> GET /providers/?org_id={org_id}",
+        "operationId": "get_org_jwks_organizations__org_id___well_known_jwks_json_get",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Force refresh of cached keys",
+              "default": false,
+              "title": "Refresh"
+            },
+            "description": "Force refresh of cached keys"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/hierarchy": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get Organization Hierarchy",
+        "description": "Get organization hierarchy with teams and users",
+        "operationId": "get_organization_hierarchy_organizations__org_id__hierarchy_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/invitations": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List Organization Invitations",
+        "description": "List all invitations for an organization (admin only)",
+        "operationId": "list_organization_invitations_organizations__org_id__invitations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/invitations/{invitation_id}": {
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Cancel Organization Invitation",
+        "description": "Cancel/revoke an organization invitation (admin only)",
+        "operationId": "cancel_organization_invitation_organizations__org_id__invitations__invitation_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invitation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/invite": {
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Invite User To Organization",
+        "description": "Invite user to join organization by email.\n\nInput: {email, role, team_id?, permissions?, message?, expires_at?}\nAuth: Bearer token with users.invite permission required.\n\nSCENARIOS:\n1. Basic invite: {email, role:\"member\"} -> sends invite email\n2. Team invite: {email, role, team_id} -> invites to specific team\n3. Admin invite: {email, role:\"admin\"} -> invites as org admin\n4. Custom perms: {email, role, permissions:[\"api.read\"]} -> grants specific perms\n\nINVITE FLOW:\n- Invite created -> email sent -> user registers with invite code -> joins org\n\nRELATED ENDPOINTS BY INTENT:\n- \"User wants to join my org\" -> User calls POST /auth/register {org_id, invitation_code}\n- \"List pending invites\" -> GET /organizations/{org_id}/invitations\n- \"Create the org first\" -> POST /organizations/\n- \"Add existing user directly\" -> POST /organizations/{org_id}/members",
+        "operationId": "invite_user_to_organization_organizations__org_id__invite_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationInvite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/sessions": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get Organization Sessions",
+        "description": "Get all active sessions in the organization (admin only)",
+        "operationId": "get_organization_sessions_organizations__org_id__sessions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Revoke All Organization Sessions",
+        "description": "Force logout ALL users in the organization (emergency use).\n\nInput: org_id in path\nAuth: Bearer token with org.admin permission required.\n\nWARNING: All users will be logged out immediately! Use for security incidents.\nUsers must re-authenticate to regain access.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Logout specific user\" -> DELETE /organizations/{org_id}/users/{user_id}/sessions\n- \"Just logout myself\" -> POST /auth/logout\n- \"Revoke specific token\" -> POST /auth/revoke",
+        "operationId": "revoke_all_organization_sessions_organizations__org_id__sessions_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/teams": {
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Create Team",
+        "description": "Create a new team within an organization.\n\nInput: {name, slug?, description?, permissions?}\nAuth: Bearer token with teams.write permission required.\n\nQUOTA: Subject to teams_per_org limit based on org tier.\nTeam members inherit team permissions automatically.\n\nRELATED ENDPOINTS BY INTENT:\n- \"List org teams\" -> GET /organizations/{org_id}/teams\n- \"Add member to team\" -> POST /teams/{team_id}/members\n- \"Update team\" -> PUT /teams/{team_id}\n- \"Delete team\" -> DELETE /teams/{team_id}",
+        "operationId": "create_team_organizations__org_id__teams_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get Organization Teams",
+        "description": "List all teams in an organization.\n\nInput: org_id in path\nAuth: Bearer token with teams.read permission required.\n\nRETURNS: [{id, name, slug, description, permissions[], member_count}]\n\nRELATED ENDPOINTS BY INTENT:\n- \"Create new team\" -> POST /organizations/{org_id}/teams\n- \"Get team details\" -> GET /teams/{team_id}\n- \"List team members\" -> GET /teams/{team_id}/members\n- \"List org members (not teams)\" -> GET /organizations/{org_id}/users",
+        "operationId": "get_organization_teams_organizations__org_id__teams_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Team"
+                  },
+                  "title": "Response Get Organization Teams Organizations  Org Id  Teams Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/users": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Get Organization Users",
+        "description": "List users in an organization with optional filtering.\n\nInput: ?role={admin|member}&limit={n}&next_token={token}\nAuth: Bearer token with users.read permission required.\n\nSCENARIOS:\n1. All members: GET /organizations/{org_id}/users\n2. Admins only: ?role=admin\n3. Paginated: ?limit=20&next_token={from_previous}\n\nRETURNS: [{user_id, email, name, role, joined_at}] or {users[], next_token}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Invite new user\" -> POST /organizations/{org_id}/invite\n- \"Remove a user\" -> DELETE /organizations/{org_id}/users/{user_id}\n- \"Change user's role\" -> PUT /organizations/{org_id}/users/{user_id}\n- \"Get org details\" -> GET /organizations/{org_id}",
+        "operationId": "get_organization_users_organizations__org_id__users_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "next_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{org_id}/users/{user_id}/sessions": {
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Revoke User Org Sessions",
+        "description": "Force logout a specific user from the organization.\n\nInput: org_id, user_id in path\nAuth: Bearer token with org.admin permission required.\n\nUSE FOR: Compromised accounts, employee termination, security incidents.\nUser must re-authenticate to regain access.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Logout all org users\" -> DELETE /organizations/{org_id}/sessions\n- \"Remove user from org\" -> DELETE /organizations/{org_id}/users/{user_id}\n- \"Deactivate user account\" -> PUT /users/{user_id} {status:\"inactive\"}",
+        "operationId": "revoke_user_org_sessions_organizations__org_id__users__user_id__sessions_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/check": {
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Check User Permission",
+        "description": "Check if a user has a specific permission.\n\nInput: {user_id, permission, org_id?, resource_type?, resource_id?}\nAuth: Bearer token with users.read permission required.\n\nSCENARIOS:\n1. Basic check: {user_id, permission:\"api.read\"} -> {allowed:bool}\n2. Org-scoped: {user_id, permission, org_id} -> checks within org context\n3. Resource-level: {user_id, permission, resource_type, resource_id} -> fine-grained\n\nRETURNS: {allowed:bool, reason?, source?, effective_permissions[]}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Grant this permission\" -> POST /permissions/grant\n- \"Revoke this permission\" -> POST /permissions/revoke\n- \"List all user permissions\" -> GET /permissions/user/{user_id}",
+        "operationId": "check_user_permission_permissions_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/permissions/grant": {
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Grant Permission",
+        "description": "Grant a permission to a user within an organization.\n\nInput: ?user_id={user_id}&org_id={org_id}&permission={permission}\nAuth: Bearer token with users.write permission required.\n\nSCENARIOS:\n1. Grant role perm: ?permission=api.read -> grants specific permission\n2. Grant wildcard: ?permission=api.* -> grants all api.* permissions\n3. Grant admin: ?permission=org.admin -> makes user org admin\n\nCOMMON PERMISSIONS: api.read, api.write, users.read, users.write,\norg.admin, billing.read, tools.use. See GET /permissions/roles for role bundles.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Check if user has permission\" -> POST /permissions/check {user_id, permission}\n- \"List user's permissions\" -> GET /permissions/user/{user_id}?org_id=\n- \"Remove permission\" -> POST /permissions/revoke ?user_id&org_id&permission\n- \"See available roles\" -> GET /permissions/roles",
+        "operationId": "grant_permission_permissions_grant_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "org_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "permission",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Permission"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/registry/register": {
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Register Service Permissions",
+        "description": "Register custom permissions for your service.\n\nInput: {service, description, actions:[], resources:[], metadata?}\nAuth: Bearer token or API key with permissions.register permission required.\n\nEXAMPLE: Register \"myapp\" service with actions [\"read\", \"write\"]\n         Creates permissions: myapp.read, myapp.write\n\nRETURNS: {valid, service, permissions_registered:[]}\n\nRELATED ENDPOINTS BY INTENT:\n- \"See registered services\" -> GET /permissions/registry/services\n- \"Grant registered permission\" -> POST /permissions/grant\n- \"Validate permission string\" -> POST /permissions/registry/validate",
+        "operationId": "register_service_permissions_permissions_registry_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServicePermissionRegister"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicePermissionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/permissions/registry/services": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get Registered Services",
+        "description": "List all registered services and their permission schemas.\n\nInput: None\nAuth: None required (public discovery endpoint).\n\nRETURNS: {services:[{name, actions, resources}]}\n\nUSE FOR: Discovering what permissions exist before granting.\nPERMISSION FORMAT: \"service.action\" (e.g., \"users.read\", \"api.write\")\n\nRELATED ENDPOINTS BY INTENT:\n- \"Get all valid permissions\" -> GET /permissions/registry/valid-permissions\n- \"Validate a permission\" -> POST /permissions/registry/validate\n- \"Grant a permission\" -> POST /permissions/grant",
+        "operationId": "get_registered_services_permissions_registry_services_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/registry/stats": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get Registry Stats",
+        "description": "Get permission registry statistics.\n\nInput: None\nAuth: None required (public endpoint).\n\nRETURNS: {total_services, total_permissions, services_list}\n\nUSE FOR: Admin dashboards, understanding permission system scope.\n\nRELATED ENDPOINTS BY INTENT:\n- \"List all services\" -> GET /permissions/registry/services\n- \"List all permissions\" -> GET /permissions/registry/valid-permissions",
+        "operationId": "get_registry_stats_permissions_registry_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/registry/valid-permissions": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get Valid Permissions",
+        "description": "List all valid permission strings, optionally filtered by service.\n\nInput: ?service= (optional filter)\nAuth: None required (public discovery endpoint).\n\nWithout filter: Returns ALL permissions from all registered services.\nWith filter: Returns only permissions for specified service.\n\nRETURNS: {permissions:[\"service.action\", ...], service}\n\nRELATED ENDPOINTS BY INTENT:\n- \"See services\" -> GET /permissions/registry/services\n- \"Validate specific permission\" -> POST /permissions/registry/validate\n- \"Grant a permission\" -> POST /permissions/grant",
+        "operationId": "get_valid_permissions_permissions_registry_valid_permissions_get",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "title": "Service"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/registry/validate": {
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Validate Permission",
+        "description": "Validate a permission string format and existence.\n\nInput: ?permission=service.action\nAuth: None required (public endpoint).\n\nChecks: Format valid (service.action), service registered, action exists.\n\nRETURNS: {valid:bool, reason?, service?, action?}\n\nRELATED ENDPOINTS BY INTENT:\n- \"List valid permissions\" -> GET /permissions/registry/valid-permissions\n- \"Grant if valid\" -> POST /permissions/grant",
+        "operationId": "validate_permission_permissions_registry_validate_post",
+        "parameters": [
+          {
+            "name": "permission",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Permission"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/revoke": {
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Revoke Permission",
+        "description": "Revoke a permission from a user within an organization.\n\nInput: ?user_id={user_id}&org_id={org_id}&permission={permission}\nAuth: Bearer token with users.write permission required.\n\nNOTE: Only revokes explicitly granted permissions, not role-inherited ones.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Grant a permission\" -> POST /permissions/grant\n- \"Check if user has permission\" -> POST /permissions/check\n- \"List user's current permissions\" -> GET /permissions/user/{user_id}\n- \"Remove user from org entirely\" -> DELETE /organizations/{org_id}/members/{user_id}",
+        "operationId": "revoke_permission_permissions_revoke_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "org_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "permission",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Permission"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/roles": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get Available Roles",
+        "description": "Get list of predefined roles and their bundled permissions.\n\nInput: None\nAuth: None required (public discovery endpoint).\n\nAVAILABLE ROLES: admin, developer, viewer, billing_admin\n\nRETURNS: {roles:{role_name:{name, description, permissions:[]}}}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Grant specific permission\" -> POST /permissions/grant\n- \"Assign role to user\" -> PUT /organizations/{org_id}/members/{user_id}\n- \"See all possible permissions\" -> GET /permissions/registry/valid-permissions",
+        "operationId": "get_available_roles_permissions_roles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/permissions/user/{user_id}": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get User Permissions",
+        "description": "List all permissions granted to a user.\n\nInput: user_id (path), ?org_id= (optional filter)\nAuth: Bearer token + users.read permission required.\n\nWithout org_id: Returns all permissions across all orgs.\nWith org_id: Returns permissions only within that org.\n\nRETURNS: {user_id, org_id, permissions:[]}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Check specific permission\" -> POST /permissions/check\n- \"Grant a permission\" -> POST /permissions/grant\n- \"Revoke a permission\" -> POST /permissions/revoke",
+        "operationId": "get_user_permissions_permissions_user__user_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "org_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/quotas/check/{resource_type}": {
+      "get": {
+        "tags": [
+          "quotas"
+        ],
+        "summary": "Check Quota",
+        "description": "Check if creating a resource would exceed quota.\n\nInput: resource_type in path, ?org_id= optional\nAuth: Bearer token required.\n\nRESOURCE TYPES: organizations_per_user, api_keys_per_user, teams_per_org, etc.\n\nRETURNS: {allowed:bool, message, current_usage, limit, remaining}\n\nUSE BEFORE: Creating orgs, API keys, teams to avoid quota errors.\n\nRELATED ENDPOINTS BY INTENT:\n- \"See all my usage\" -> GET /quotas/my-usage\n- \"See tier limits\" -> GET /quotas/tiers\n- \"Create organization\" -> POST /organizations/ (returns 429 if quota exceeded)",
+        "operationId": "check_quota_quotas_check__resource_type__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "resource_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Resource Type"
+            }
+          },
+          {
+            "name": "org_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Check Quota Quotas Check  Resource Type  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/quotas/my-usage": {
+      "get": {
+        "tags": [
+          "quotas"
+        ],
+        "summary": "Get My Quota Usage",
+        "description": "Get your current quota usage and limits.\n\nInput: None\nAuth: Bearer token required.\n\nRETURNS: {tier, usage:{orgs, api_keys, ...}, limits:{...}, percentages:{...}}\n\nUSE FOR: Checking usage before creating resources, displaying quota UI.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Check if I can create X\" -> GET /quotas/check/{resource_type}\n- \"See all tier limits\" -> GET /quotas/tiers\n- \"Upgrade my plan\" -> See upgrade_url in response",
+        "operationId": "get_my_quota_usage_quotas_my_usage_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Get My Quota Usage Quotas My Usage Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/quotas/tiers": {
+      "get": {
+        "tags": [
+          "quotas"
+        ],
+        "summary": "Get Quota Tiers",
+        "description": "List all quota tiers and their limits.\n\nInput: None\nAuth: None required (public endpoint).\n\nRETURNS: {tiers:{free:{limits}, pro:{limits}, ...}, upgrade_url}\n\nUSE FOR: Displaying pricing/limits comparison, planning capacity.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Check my current tier\" -> GET /quotas/my-usage (see tier field)\n- \"Upgrade my plan\" -> Visit upgrade_url\n- \"Check specific quota\" -> GET /quotas/check/{resource_type}",
+        "operationId": "get_quota_tiers_quotas_tiers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Get Quota Tiers Quotas Tiers Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/me": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Get Current User Profile",
+        "description": "Get current authenticated user's profile.\n\nInput: None\nAuth: Bearer token required.\n\nRETURNS: {id, email, name, status, organizations[], permissions[], ...}\n\nRELATED ENDPOINTS BY INTENT:\n- \"Update my profile\" -> PUT /users/me\n- \"List my organizations\" -> GET /users/me/organizations\n- \"Change my password\" -> POST /users/me/change-password\n- \"Switch organization context\" -> POST /auth/switch-organization",
+        "operationId": "get_current_user_profile_users_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update Current User Profile",
+        "description": "Update current user's profile fields.\n\nInput: {name?, phone?, avatar_url?, timezone?, language?, metadata?}\nAuth: Bearer token required.\n\nNOTE: Only provided fields are updated (partial update). Email cannot be changed here.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Get my current profile\" -> GET /users/me\n- \"Change my password\" -> POST /users/me/change-password\n- \"Change my email\" -> POST /users/me/change-email (requires verification)",
+        "operationId": "update_current_user_profile_users_me_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/users/me/change-password": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Change Password",
+        "description": "Change current user's password (requires current password).\n\nInput: {current_password, new_password}\nAuth: Bearer token required.\nNote: new_password must meet policy. See GET /status for password_policy.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Forgot my password\" -> POST /auth/request-password-reset {email}\n- \"Update my profile\" -> PUT /users/me\n- \"Get my profile\" -> GET /users/me",
+        "operationId": "change_password_users_me_change_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/users/me/organizations": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Get My Organizations",
+        "description": "List all organizations the current user belongs to.\n\nInput: None\nAuth: Bearer token required.\n\nRETURNS: [{id, name, type, role, is_personal, is_default, permissions[]}]\n\nUSE FOR: Building org switcher UI, checking multi-org membership.\n\nRELATED ENDPOINTS BY INTENT:\n- \"Switch to different org\" -> POST /auth/switch-organization {org_id}\n- \"Leave an organization\" -> DELETE /organizations/{org_id}/members/me\n- \"Create new organization\" -> POST /organizations/\n- \"Get my profile\" -> GET /users/me",
+        "operationId": "get_my_organizations_users_me_organizations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserOrganizationInfo"
+                  },
+                  "type": "array",
+                  "title": "Response Get My Organizations Users Me Organizations Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    }
+  }
+}
