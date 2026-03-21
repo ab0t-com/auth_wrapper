@@ -604,6 +604,40 @@ token_cache.set()                                  108,719   0.0085ms   0.0202ms
 
 ---
 
+## Skills (AI Agent Integration Guides)
+
+This repo includes two skill packages in `Skills/` that teach AI coding agents how to work with the auth service. You can install them into Claude Code (or any agent that supports the [Agent Skills](https://agentskills.io) format) so the agent knows how to integrate auth into your services.
+
+### Install for Claude Code
+
+```bash
+# Auth integration skill — how to add auth to a FastAPI service
+mkdir -p .claude/skills && wget -qO- \
+  https://github.com/ab0t-com/auth_wrapper/archive/refs/heads/main.tar.gz \
+  | tar xz --strip-components=2 -C .claude/skills auth_wrapper-main/Skills/auth_fastapi_skill
+
+# Scenario guides — 24 real-world integration walkthroughs
+wget -qO- \
+  https://github.com/ab0t-com/auth_wrapper/archive/refs/heads/main.tar.gz \
+  | tar xz --strip-components=2 -C .claude/skills auth_wrapper-main/Skills/auth_service_ab0t
+```
+
+Or install user-wide (available in all projects):
+
+```bash
+mkdir -p ~/.claude/skills && wget -qO- \
+  https://github.com/ab0t-com/auth_wrapper/archive/refs/heads/main.tar.gz \
+  | tar xz --strip-components=2 -C ~/.claude/skills auth_wrapper-main/Skills/auth_fastapi_skill
+
+wget -qO- \
+  https://github.com/ab0t-com/auth_wrapper/archive/refs/heads/main.tar.gz \
+  | tar xz --strip-components=2 -C ~/.claude/skills auth_wrapper-main/Skills/auth_service_ab0t
+```
+
+Once installed, Claude Code will automatically know how to integrate auth into your FastAPI services, and can reference real-world scenario guides covering 15+ verticals (SaaS, fintech, healthcare, gaming, government, marketplaces, and more).
+
+---
+
 ## License
 
 MIT License - Use it, modify it, ship it. See [LICENSE](LICENSE) for details.
