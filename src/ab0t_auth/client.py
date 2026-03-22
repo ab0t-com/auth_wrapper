@@ -14,6 +14,7 @@ import httpx
 from ab0t_auth.core import (
     ApiKeyValidationResponse,
     AuthConfig,
+    IntrospectionResponse,
     LoginResponse,
     PermissionCheckRequest,
     PermissionCheckResponse,
@@ -42,6 +43,21 @@ def _safe_permissions(value: Any) -> tuple[str, ...]:
         if "," in value:
             return tuple(p.strip() for p in value.split(",") if p.strip())
         return tuple(value.split()) if value.strip() else ()
+    return ()
+
+
+def _parse_permissions(data: dict[str, Any]) -> tuple[str, ...]:
+    """Extract permissions from auth service response data.
+
+    Unified parser used by login(), refresh_token(), and validate_token().
+    Checks both 'permissions' (array) and 'scope' (OAuth2 space-separated string).
+    Always checks 'permissions' first — it's the canonical field from the
+    ab0t auth service. 'scope' is the OAuth2 fallback.
+    """
+    if "permissions" in data:
+        return _safe_permissions(data["permissions"])
+    if "scope" in data:
+        return _safe_permissions(data["scope"])
     return ()
 
 
@@ -104,17 +120,6 @@ async def login(
         response.raise_for_status()
         data = response.json()
 
-        # Parse permissions from scope string or array
-        permissions: tuple[str, ...] = ()
-        if "scope" in data:
-            scope = data["scope"]
-            if isinstance(scope, str):
-                permissions = tuple(scope.split()) if scope else ()
-            elif isinstance(scope, list):
-                permissions = tuple(scope)
-        elif "permissions" in data:
-            permissions = _safe_permissions(data.get("permissions"))
-
         return LoginResponse(
             access_token=data["access_token"],
             refresh_token=data.get("refresh_token"),
@@ -123,7 +128,7 @@ async def login(
             user_id=data.get("user", {}).get("id") or data.get("user_id"),
             email=data.get("user", {}).get("email") or data.get("email"),
             org_id=data.get("org_id"),
-            permissions=permissions,
+            permissions=_parse_permissions(data),
         )
 
     except httpx.HTTPStatusError as e:
@@ -154,17 +159,12 @@ async def refresh_token(
         response.raise_for_status()
         data = response.json()
 
-        permissions: tuple[str, ...] = ()
-        if "scope" in data:
-            scope = data["scope"]
-            permissions = tuple(scope.split()) if isinstance(scope, str) and scope else ()
-
         return LoginResponse(
             access_token=data["access_token"],
             refresh_token=data.get("refresh_token"),
             token_type=data.get("token_type", "Bearer"),
             expires_in=data.get("expires_in"),
-            permissions=permissions,
+            permissions=_parse_permissions(data),
         )
 
     except httpx.HTTPStatusError as e:
@@ -202,19 +202,12 @@ async def validate_token(
         response.raise_for_status()
         data = response.json()
 
-        permissions: tuple[str, ...] = ()
-        if "permissions" in data:
-            permissions = _safe_permissions(data.get("permissions"))
-        elif "scope" in data:
-            scope = data["scope"]
-            permissions = tuple(scope.split()) if isinstance(scope, str) and scope else ()
-
         return TokenValidationResponse(
             valid=data.get("valid", False),
             user_id=data.get("user_id"),
             email=data.get("email"),
             org_id=data.get("org_id"),
-            permissions=permissions,
+            permissions=_parse_permissions(data),
             expires_at=data.get("expires_at"),
         )
 
@@ -442,11 +435,12 @@ async def introspect_token(
     token: str,
     *,
     token_type_hint: str = "access_token",
-) -> dict[str, Any]:
+) -> IntrospectionResponse:
     """
     Introspect token using RFC 7662.
 
     For checking token revocation status.
+    Returns IntrospectionResponse with active=False as fail-closed default.
     """
     try:
         response = await client.post(
@@ -457,7 +451,24 @@ async def introspect_token(
             },
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+
+        return IntrospectionResponse(
+            active=data.get("active", False),
+            scope=data.get("scope"),
+            client_id=data.get("client_id"),
+            username=data.get("username"),
+            token_type=data.get("token_type"),
+            exp=data.get("exp"),
+            iat=data.get("iat"),
+            sub=data.get("sub"),
+            aud=data.get("aud"),
+            iss=data.get("iss"),
+            jti=data.get("jti"),
+            user_id=data.get("user_id"),
+            org_id=data.get("org_id"),
+            permissions=_safe_permissions(data.get("permissions")),
+        )
 
     except httpx.HTTPStatusError as e:
         raise map_http_error(e.response.status_code, str(e)) from e

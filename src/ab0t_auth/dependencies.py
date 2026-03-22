@@ -57,16 +57,18 @@ def _validate_check_result(result: Any, callback_name: str) -> bool:
     """
     Validate and normalize check callback result to bool.
 
-    Logs warning for non-bool returns and treats them as failure (safe default).
+    Logs ERROR for non-bool returns and treats them as failure (safe default).
+    This is almost always a bug in the callback — return True/False explicitly.
     """
     if isinstance(result, bool):
         return result
 
-    _logger.warning(
-        "Check callback '%s' returned non-bool type '%s', treating as False. "
-        "Check callbacks must return bool for security.",
+    _logger.error(
+        "Check callback '%s' returned non-bool type '%s' (value: %r), treating as False. "
+        "Check callbacks MUST return bool. This is likely a bug in your callback.",
         callback_name,
         type(result).__name__,
+        result,
     )
     return False
 

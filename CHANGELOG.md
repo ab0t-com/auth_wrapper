@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Trailing slashes are normalized (`/health/` matches `/health`)
   - Wildcard prefix patterns are segment-boundary-aware (`/api/public*` no longer matches `/api/publicly_secret`, only `/api/public/...`)
 
+- **Permissions parsing unified across all client functions** (`client.py`)
+  - `login()`, `refresh_token()`, and `validate_token()` now all use `_parse_permissions()` with consistent order: `permissions` field first, `scope` as fallback
+  - Previously `login()` checked `scope` first, `validate_token()` checked `permissions` first, and `refresh_token()` only checked `scope` — same response data could produce different results depending on the function
+
+- **`introspect_token()` now returns typed `IntrospectionResponse`** (`client.py`)
+  - Previously returned a raw `dict` with no validation of the RFC 7662 `active` field — callers could forget to check it and treat inactive tokens as valid
+  - Now returns `IntrospectionResponse` dataclass with `active: bool` defaulting to `False` (fail-closed)
+
+- **Non-bool check callback results logged at ERROR** (`dependencies.py`)
+  - Previously logged at WARNING — easy to miss in production logs
+  - Now logs at ERROR with the returned value for easier debugging
+
 ### Added
 
 - **Permission fallback configuration** (`permission_fallback`)

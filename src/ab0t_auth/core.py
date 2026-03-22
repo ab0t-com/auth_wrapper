@@ -248,6 +248,32 @@ class ApiKeyValidationResponse:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class IntrospectionResponse:
+    """Response from RFC 7662 token introspection.
+
+    The 'active' field is the only REQUIRED field per RFC 7662.
+    Defaults to False (fail-closed) — if the auth service omits it,
+    the token is treated as inactive.
+    """
+
+    active: bool = False
+    scope: str | None = None
+    client_id: str | None = None
+    username: str | None = None
+    token_type: str | None = None
+    exp: int | None = None
+    iat: int | None = None
+    sub: str | None = None
+    aud: str | None = None
+    iss: str | None = None
+    jti: str | None = None
+    # Extra fields not in RFC 7662 but returned by ab0t auth service
+    user_id: str | None = None
+    org_id: str | None = None
+    permissions: tuple[str, ...] = field(default_factory=tuple)
+
+
 # =============================================================================
 # Request Types
 # =============================================================================

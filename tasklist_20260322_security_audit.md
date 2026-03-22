@@ -56,14 +56,14 @@
   - Fixed in both FastAPI middleware and Flask adapter
   - **Tests:** prefix overreach, case bypass, trailing slash bypass
 
-- [ ] **BUG-007: Inconsistent permissions parsing** (`client.py:84-93` vs `135-137` vs `183-187`)
+- [x] **BUG-007: Inconsistent permissions parsing** (`client.py:84-93` vs `135-137` vs `183-187`)
   - `login()` checks `scope` first, then `permissions`
   - `validate_token()` checks `permissions` first, then `scope`
   - `refresh_token()` only checks `scope`
   - **Fix:** Unify parsing order across all three functions. Extract to a helper.
   - **Test:** `test_security_failopen.py::test_permissions_parsing_consistency`
 
-- [ ] **BUG-008: `introspect_token()` returns raw dict** (`client.py:437`)
+- [x] **BUG-008: `introspect_token()` returns raw dict** (`client.py:437`)
   - No validation of RFC 7662 `active` field
   - Caller must manually check — easy to miss
   - **Fix:** Return a typed dataclass with `active: bool` defaulting to `False`.
@@ -73,13 +73,13 @@
 
 ## To Do — Low
 
-- [ ] **BUG-009: `token_type` hardcoded to `"Bearer"`** (`client.py:98, 142`)
-  - Minor — reasonable default but should read from response
-  - **Fix:** Already uses `.get()` — acceptable as-is. Document.
+- [x] **BUG-009: `token_type` hardcoded to `"Bearer"`** (`client.py:98, 142`)
+  - Acceptable as-is — `.get("token_type", "Bearer")` is a reasonable default
+  - No fix needed
 
-- [ ] **BUG-010: Non-bool check callback results silent** (`dependencies.py:56-71`)
-  - Returns `False` on non-bool — safe default but hard to debug
-  - **Fix:** Log at ERROR level, not WARNING. Consider raising in debug mode.
+- [x] **BUG-010: Non-bool check callback results silent** (`dependencies.py:56-71`)
+  - Upgraded from WARNING to ERROR log level
+  - Includes the returned value in the log for easier debugging
 
 ---
 

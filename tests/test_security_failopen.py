@@ -444,37 +444,163 @@ class TestBug006PathExclusion:
 # =============================================================================
 
 
-class TestBug007InconsistentParsing:
-    """Permissions parsing should be consistent across all client functions."""
+class TestBug007ConsistentParsing:
+    """Permissions parsing is now consistent across all client functions."""
 
     @pytest.mark.asyncio
-    async def test_validate_token_checks_permissions_before_scope(self, auth_config):
-        """PROVES BUG: validate_token checks 'permissions' first, login checks 'scope' first.
-
-        If both fields are present with different values, the result differs
-        depending on which function you call — inconsistent behavior.
-        """
-        response_data = {
-            "valid": True,
-            "user_id": "user_123",
-            "permissions": ["from_permissions_field"],
-            "scope": "from_scope_field",
-        }
-
+    async def test_permissions_field_takes_priority_in_validate_token(self, auth_config):
+        """When both 'permissions' and 'scope' are present, 'permissions' wins."""
         with respx.mock:
-            # validate_token uses /auth/validate
             respx.post(TOKEN_ENDPOINT).mock(
-                return_value=httpx.Response(200, json=response_data)
+                return_value=httpx.Response(200, json={
+                    "valid": True,
+                    "user_id": "user_123",
+                    "permissions": ["from_permissions_field"],
+                    "scope": "from_scope_field",
+                })
             )
 
             async with httpx.AsyncClient() as client:
                 result = await validate_token(client, auth_config, "token")
 
-        # validate_token checks 'permissions' first
         assert result.permissions == ("from_permissions_field",)
 
-        # But login() would check 'scope' first and return ("from_scope_field",)
-        # This inconsistency is the bug — same data, different results
+    @pytest.mark.asyncio
+    async def test_permissions_field_takes_priority_in_login(self, auth_config):
+        """FIXED: login() now checks 'permissions' first, same as validate_token()."""
+        with respx.mock:
+            respx.post(f"{AUTH_URL}/auth/login").mock(
+                return_value=httpx.Response(200, json={
+                    "access_token": "tok",
+                    "permissions": ["from_permissions_field"],
+                    "scope": "from_scope_field",
+                })
+            )
+
+            async with httpx.AsyncClient() as client:
+                from ab0t_auth.client import login
+                result = await login(client, auth_config, "user@test.com", "pass")
+
+        # FIXED: login() now also checks 'permissions' first
+        assert result.permissions == ("from_permissions_field",)
+
+    @pytest.mark.asyncio
+    async def test_scope_used_as_fallback_in_login(self, auth_config):
+        """When only 'scope' is present, it's used as fallback."""
+        with respx.mock:
+            respx.post(f"{AUTH_URL}/auth/login").mock(
+                return_value=httpx.Response(200, json={
+                    "access_token": "tok",
+                    "scope": "read write admin",
+                })
+            )
+
+            async with httpx.AsyncClient() as client:
+                from ab0t_auth.client import login
+                result = await login(client, auth_config, "user@test.com", "pass")
+
+        assert result.permissions == ("read", "write", "admin")
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_also_parses_permissions_field(self, auth_config):
+        """FIXED: refresh_token() now checks 'permissions' too, not just 'scope'."""
+        with respx.mock:
+            respx.post(f"{AUTH_URL}/auth/refresh").mock(
+                return_value=httpx.Response(200, json={
+                    "access_token": "new_tok",
+                    "permissions": ["billing:read", "users:write"],
+                })
+            )
+
+            async with httpx.AsyncClient() as client:
+                from ab0t_auth.client import refresh_token
+                result = await refresh_token(client, auth_config, "old_refresh_tok")
+
+        # FIXED: refresh_token now uses _parse_permissions which checks 'permissions'
+        assert result.permissions == ("billing:read", "users:write")
+
+
+# =============================================================================
+# BUG-008: introspect_token() returns typed response
+# =============================================================================
+
+
+class TestBug008IntrospectionTyped:
+    """introspect_token() returns IntrospectionResponse with fail-closed active default."""
+
+    @pytest.mark.asyncio
+    async def test_missing_active_field_defaults_to_false(self, auth_config):
+        """If auth service omits 'active', default to False (fail-closed)."""
+        with respx.mock:
+            respx.post(f"{AUTH_URL}/token/introspect").mock(
+                return_value=httpx.Response(200, json={
+                    "sub": "user_123",
+                    "scope": "read write",
+                })
+            )
+
+            async with httpx.AsyncClient() as client:
+                from ab0t_auth.client import introspect_token
+                result = await introspect_token(client, auth_config, "some_token")
+
+        assert result.active is False  # Fail-closed
+        assert result.sub == "user_123"
+
+    @pytest.mark.asyncio
+    async def test_active_true_respected(self, auth_config):
+        """Explicit active=true is returned correctly."""
+        with respx.mock:
+            respx.post(f"{AUTH_URL}/token/introspect").mock(
+                return_value=httpx.Response(200, json={
+                    "active": True,
+                    "sub": "user_123",
+                    "user_id": "user_123",
+                    "org_id": "org_456",
+                    "scope": "read write",
+                    "permissions": ["billing:read"],
+                })
+            )
+
+            async with httpx.AsyncClient() as client:
+                from ab0t_auth.client import introspect_token
+                result = await introspect_token(client, auth_config, "valid_token")
+
+        assert result.active is True
+        assert result.user_id == "user_123"
+        assert result.org_id == "org_456"
+        assert result.permissions == ("billing:read",)
+
+    @pytest.mark.asyncio
+    async def test_active_false_for_revoked_token(self, auth_config):
+        """Revoked token returns active=false."""
+        with respx.mock:
+            respx.post(f"{AUTH_URL}/token/introspect").mock(
+                return_value=httpx.Response(200, json={
+                    "active": False,
+                })
+            )
+
+            async with httpx.AsyncClient() as client:
+                from ab0t_auth.client import introspect_token
+                result = await introspect_token(client, auth_config, "revoked_token")
+
+        assert result.active is False
+
+    @pytest.mark.asyncio
+    async def test_returns_typed_response_not_dict(self, auth_config):
+        """introspect_token returns IntrospectionResponse, not raw dict."""
+        with respx.mock:
+            respx.post(f"{AUTH_URL}/token/introspect").mock(
+                return_value=httpx.Response(200, json={"active": True})
+            )
+
+            async with httpx.AsyncClient() as client:
+                from ab0t_auth.client import introspect_token
+                from ab0t_auth.core import IntrospectionResponse
+                result = await introspect_token(client, auth_config, "token")
+
+        assert isinstance(result, IntrospectionResponse)
+        assert not isinstance(result, dict)
 
 
 # =============================================================================
