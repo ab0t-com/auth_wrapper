@@ -144,6 +144,7 @@ else
         -d '{
             "name": "'"$SERVICE_NAME"'",
             "slug": "'"$SERVICE_ID"'",
+            "service_audience": "'"$SERVICE_AUDIENCE"'",
             "domain": "'"$SERVICE_ID"'.service.ab0t.com",
             "billing_type": "enterprise",
             "settings": {

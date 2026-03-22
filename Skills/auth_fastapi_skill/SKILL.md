@@ -89,7 +89,7 @@ git+https://github.com/ab0t-com/auth_wrapper.git
 ```python
 class Settings(BaseSettings):
     AB0T_AUTH_URL: str = "https://auth.service.ab0t.com"
-    AB0T_AUTH_AUDIENCE: str = "LOCAL:your-org-uuid-here"  # From credentials/{service}.json
+    AB0T_AUTH_AUDIENCE: str = "your-service-slug"  # From credentials/{service}.json → service_audience
     AB0T_AUTH_DEBUG: bool = False
     AB0T_AUTH_BYPASS: bool = False  # DEVELOPMENT ONLY — requires DEBUG=true too
     AB0T_AUTH_AUDIENCE_SKIP: bool = False  # TEMPORARY transition flag

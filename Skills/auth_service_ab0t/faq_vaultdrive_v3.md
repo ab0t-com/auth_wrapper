@@ -170,7 +170,7 @@ question: We are three founders building a cloud file storage SaaS called "Vault
 
   auth = AuthGuard(
       auth_url="https://auth.service.ab0t.com",
-      audience="LOCAL:vaultdrive-service-org-uuid",
+      audience="vaultdrive",  # Matches service_audience from registration
       permission_check_mode="server",
   )
 

@@ -96,7 +96,7 @@ Complete spec (137 endpoints): `https://auth.service.ab0t.com/openapi.json`
 {
   "api_key": "<The API key to validate>",
   "required_permissions": [],
-  "expected_audience": "<Expected audience - API key's org must match (e.g., LOCAL:org-123)>"
+  "expected_audience": "<Expected audience - service name from org's service_audience field (e.g., billing-service)>"
 }
 ```
 
@@ -427,6 +427,7 @@ Complete spec (137 endpoints): `https://auth.service.ab0t.com/openapi.json`
 {
   "name": "<Name>",
   "slug": "<Slug>",
+  "service_audience": "<Service Audience (sets JWT aud claim; defaults to slug if omitted)>",
   "domain": "<Domain>",
   "parent_id": "<Parent Id>",
   "billing_type": "prepaid",

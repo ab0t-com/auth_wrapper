@@ -182,7 +182,7 @@ cat credentials/resource.json | jq '.organization.id'
 # Returns: "020caf72-d9cd-48b1-bbfc-2bc8c67f0cc5"
 ```
 
-This UUID goes into your `app/config.py` as `AB0T_AUTH_AUDIENCE = "LOCAL:020caf72-d9cd-48b1-bbfc-2bc8c67f0cc5"`.
+The `service_audience` value goes into your `app/config.py` as `AB0T_AUTH_AUDIENCE = "resource-service"` (the service slug, not the UUID).
 <!-- /FAQ -->
 
 ### Q: What if the auth service is down when I try to register?
@@ -298,11 +298,11 @@ This is both better UX and better security (no stack traces leaked).
 ### Q: What's `AB0T_AUTH_AUDIENCE` and what happens if I don't set it?
 
 <!-- FAQ:audience-explained -->
-The audience is a JWT claim that identifies the intended recipient of the token. Format: `LOCAL:{org_uuid}`.
+The audience is a JWT claim that identifies the intended recipient of the token. Format: the service slug (e.g., `billing-service`, `sandbox-platform`). This is set by the `service_audience` field on the org record at creation time.
 
 If you don't set it, your service accepts JWTs from ANY service in the platform. A token issued for the billing service would work on the resource service. This is a security vulnerability — it means compromising any service's tokens compromises all services.
 
-Setting audience ensures your service only accepts tokens meant for it. Get your org UUID from `credentials/{service}.json` after registration.
+Setting audience ensures your service only accepts tokens meant for it. Get the value from `credentials/{service}.json` → `service_audience` after registration.
 <!-- /FAQ -->
 
 ---
@@ -614,7 +614,7 @@ For staging, use real API keys with appropriate permissions — this tests the a
 <!-- FAQ:debug-401 -->
 Check these in order:
 1. **Token expired?** JWTs expire in 15-60 min. Decode it at jwt.io and check `exp`.
-2. **Wrong audience?** Your token's `aud` claim must match `AB0T_AUTH_AUDIENCE`. If your service expects `LOCAL:abc-123` but the token has `LOCAL:def-456`, it's rejected.
+2. **Wrong audience?** Your token's `aud` claim must match `AB0T_AUTH_AUDIENCE`. If your service expects `billing-service` but the token has `sandbox-platform`, it's rejected. (Legacy tokens may use `LOCAL:{uuid}` format.)
 3. **JWKS not fetched?** If AuthGuard isn't initialized (missing lifespan), it can't verify signatures. Check for `AuthGuard not initialized` in logs.
 4. **Wrong header?** JWT goes in `Authorization: Bearer <token>`, API key goes in `X-API-Key: <key>`.
 5. **Auth service unreachable?** Server-mode permission checks call the auth service. If it's down, you get 401 or 503.

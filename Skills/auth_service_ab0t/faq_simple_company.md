@@ -132,7 +132,7 @@
 
   class Settings(BaseSettings):
       AB0T_AUTH_URL: str = "https://auth.service.ab0t.com"
-      AB0T_AUTH_AUDIENCE: str = "LOCAL:your-taskflow-service-org-uuid"
+      AB0T_AUTH_AUDIENCE: str = "taskflow"  # Matches service_audience from registration
       AB0T_AUTH_PERMISSION_CHECK_MODE: str = "server"  # Revocations take effect immediately
 
   4c: Create your auth module (app/auth.py)
