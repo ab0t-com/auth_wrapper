@@ -1,0 +1,106 @@
+{
+  "$schema": "https://auth.service.ab0t.com/schemas/permissions/v2",
+  "service": {
+    "id": "__SERVICE_SLUG__",
+    "name": "__SERVICE_NAME__",
+    "description": "__SERVICE_DESCRIPTION__",
+    "version": "1.0.0",
+    "audience": "__SERVICE_SLUG__",
+    "maintainer": "__MAINTAINER_EMAIL__"
+  },
+
+  "_comment_registration": "List every action verb and resource noun your service uses. The auth service uses this to validate permission IDs.",
+  "registration": {
+    "service": "__SERVICE_SLUG__",
+    "actions": ["read", "write", "create", "delete", "admin", "cross_tenant"],
+    "resources": ["items"]
+  },
+
+  "_comment_permissions": "Each permission follows the format {slug}.{action} or {slug}.{action}.{resource}. Only define permissions that routes actually check.",
+  "permissions": [
+    {
+      "id": "__SERVICE_SLUG__.read",
+      "name": "Read",
+      "description": "View resources",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "__SERVICE_SLUG__.write",
+      "name": "Write",
+      "description": "Create and modify resources",
+      "risk_level": "medium",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "__SERVICE_SLUG__.delete",
+      "name": "Delete",
+      "description": "Permanently remove resources",
+      "risk_level": "high",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "_comment": "admin implies all lower permissions — avoids granting each one individually. Add new permissions here as you create them.",
+      "id": "__SERVICE_SLUG__.admin",
+      "name": "Administrator",
+      "description": "Full access to all org resources",
+      "risk_level": "critical",
+      "cost_impact": false,
+      "default_grant": false,
+      "implies": [
+        "__SERVICE_SLUG__.read",
+        "__SERVICE_SLUG__.write",
+        "__SERVICE_SLUG__.delete"
+      ]
+    },
+    {
+      "_comment": "cross_tenant is NEVER implied by admin. It must be a conscious, separate grant. All cross-tenant access is logged and audited.",
+      "id": "__SERVICE_SLUG__.cross_tenant",
+      "name": "Cross-Tenant Access",
+      "description": "Access resources across organization boundaries",
+      "risk_level": "critical",
+      "cost_impact": false,
+      "default_grant": false
+    }
+  ],
+
+  "_comment_roles": "Roles bundle permissions for convenience. The 'default: true' role is auto-assigned to new users in an org.",
+  "roles": [
+    {
+      "id": "__SERVICE_SLUG__-user",
+      "name": "User",
+      "description": "Standard user with read/write access",
+      "permissions": [
+        "__SERVICE_SLUG__.read",
+        "__SERVICE_SLUG__.write",
+        "__SERVICE_SLUG__.delete"
+      ],
+      "default": true
+    },
+    {
+      "id": "__SERVICE_SLUG__-viewer",
+      "name": "Viewer",
+      "description": "Read-only access",
+      "permissions": ["__SERVICE_SLUG__.read"],
+      "default": false
+    },
+    {
+      "id": "__SERVICE_SLUG__-admin",
+      "name": "Administrator",
+      "description": "Full admin access within org",
+      "permissions": ["__SERVICE_SLUG__.admin"],
+      "default": false
+    }
+  ],
+
+  "_comment_multi_tenancy": "Strict isolation means users can only see resources in their own org. cross_tenant_permission controls who can bypass this.",
+  "multi_tenancy": {
+    "isolation_model": "organization",
+    "tenant_field": "org_id",
+    "enforcement": "strict",
+    "cross_tenant_permission": "__SERVICE_SLUG__.cross_tenant"
+  }
+}

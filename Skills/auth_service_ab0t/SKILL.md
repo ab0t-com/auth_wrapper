@@ -63,6 +63,8 @@ End-to-end FAQ walkthroughs showing how real companies integrate with the ab0t a
 
 - **[faq_hosted_login.md](faq_hosted_login.md)** — Deep dive on hosted login specifically. BYOUI vs SDK vs hosted page patterns, login config API, OAuth client registration, org-scoped auth endpoints, login-as-join.
 
+- **[faq_vaultdrive_v3.md](faq_vaultdrive_v3.md)** — Cloud file storage SaaS (VaultDrive) for regulated industries. Three founders scaling to thousands of customers. Covers: OAuth 2.1 with Google/GitHub (no passwords), hosted login, sub-orgs for customer teams, service accounts for background workers, delegation tokens, third-party API keys.
+
 ### Architecture Reference
 
 - **[authz_layer_simple.md](authz_layer_simple.md)** — Explanation of the permission system architecture: schema registry (global) vs permission grants (org-scoped), comparison to Zanzibar/AWS IAM/Auth0/Istio.
@@ -95,4 +97,5 @@ Match the user's scenario to the closest guide:
 | "We're a marketplace" | `faq_marketplace_twosided_v1.md` |
 | "We resell / whitelabel" | `faq_saas_reseller_whitelabel_v2.md` |
 | "We need compliance / clearances" | `faq_government_clearance_v1.md` |
+| "We're building cloud storage / file sharing" | `faq_vaultdrive_v3.md` |
 | "How does the permission system work?" | `authz_layer_simple.md` |

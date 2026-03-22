@@ -6,7 +6,7 @@ BRANCH="main"
 ARCHIVE_URL="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz"
 ARCHIVE_PREFIX="auth_wrapper-${BRANCH}/Skills"
 
-SKILLS=(auth_fastapi_skill auth_service_ab0t)
+SKILLS=(auth_fastapi_skill auth_service_ab0t auth_quickstart auth_quickstart_advanced)
 
 usage() {
     cat <<EOF

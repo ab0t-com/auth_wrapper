@@ -1,0 +1,193 @@
+{
+  "_comment_overview": "This file defines permissions that EXIST. app/auth.py defines which permissions routes CHECK. They must match — if auth.py checks 'pm.write.projects', it must be defined here. Run the registration script after adding new permissions so the auth service knows about them.",
+  "$schema": "https://auth.service.ab0t.com/schemas/permissions/v2",
+  "service": {
+    "id": "pm",
+    "name": "Project Manager",
+    "description": "Project management service with tasks, comments, and org-wide reports",
+    "version": "1.0.0",
+    "audience": "pm",
+    "maintainer": "team@example.com"
+  },
+
+  "_comment_registration": "Every action verb and resource noun the service uses. The auth service validates permission IDs against these.",
+  "registration": {
+    "service": "pm",
+    "actions": ["read", "write", "create", "delete", "archive", "admin", "cross_tenant"],
+    "resources": ["projects", "tasks", "comments", "reports"]
+  },
+
+  "_comment_permissions": "Each permission follows {slug}.{action}.{resource}. Only define permissions that routes actually check. Granular permissions let you build roles with exactly the right access — a viewer doesn't need write, a contributor doesn't need archive.",
+  "permissions": [
+    {
+      "_comment": "--- PROJECT PERMISSIONS ---",
+      "id": "pm.read.projects",
+      "name": "Read Projects",
+      "description": "View project details and list projects",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "pm.create.projects",
+      "name": "Create Projects",
+      "description": "Create new projects. Separate from write — new projects consume org resources.",
+      "risk_level": "medium",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "pm.write.projects",
+      "name": "Edit Projects",
+      "description": "Update project name, description, and visibility settings",
+      "risk_level": "medium",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "_comment": "Archive is separate from write — it's a destructive operation that blocks all future edits to the project and its tasks.",
+      "id": "pm.archive.projects",
+      "name": "Archive Projects",
+      "description": "Archive projects (soft delete). Prevents further modifications.",
+      "risk_level": "high",
+      "cost_impact": false,
+      "default_grant": false
+    },
+    {
+      "_comment": "--- TASK PERMISSIONS ---",
+      "id": "pm.read.tasks",
+      "name": "Read Tasks",
+      "description": "View tasks within accessible projects",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "pm.create.tasks",
+      "name": "Create Tasks",
+      "description": "Create tasks within accessible projects",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "id": "pm.write.tasks",
+      "name": "Edit Tasks",
+      "description": "Update task status, title, and assignee",
+      "risk_level": "medium",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "_comment": "Delete is separate from write — task deletion is permanent and cascades to comments.",
+      "id": "pm.delete.tasks",
+      "name": "Delete Tasks",
+      "description": "Permanently remove tasks and their comments",
+      "risk_level": "high",
+      "cost_impact": false,
+      "default_grant": false
+    },
+    {
+      "_comment": "--- COMMENT PERMISSIONS ---",
+      "id": "pm.create.comments",
+      "name": "Post Comments",
+      "description": "Add comments to tasks",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": true
+    },
+    {
+      "_comment": "Moderation: delete any comment. In auth.py, CommentModerator uses require_any_permission with this OR pm.admin.",
+      "id": "pm.delete.comments",
+      "name": "Delete Comments",
+      "description": "Remove any comment (moderation)",
+      "risk_level": "medium",
+      "cost_impact": false,
+      "default_grant": false
+    },
+    {
+      "_comment": "--- REPORTS ---",
+      "id": "pm.read.reports",
+      "name": "View Reports",
+      "description": "View org-wide project reports and statistics",
+      "risk_level": "low",
+      "cost_impact": false,
+      "default_grant": false
+    },
+    {
+      "_comment": "--- ADMIN / CROSS-TENANT ---",
+      "id": "pm.admin",
+      "name": "Administrator",
+      "description": "Full org-level access. Implies all permissions above.",
+      "risk_level": "critical",
+      "cost_impact": false,
+      "default_grant": false,
+      "implies": [
+        "pm.read.projects", "pm.create.projects", "pm.write.projects", "pm.archive.projects",
+        "pm.read.tasks", "pm.create.tasks", "pm.write.tasks", "pm.delete.tasks",
+        "pm.create.comments", "pm.delete.comments",
+        "pm.read.reports"
+      ]
+    },
+    {
+      "_comment": "cross_tenant is NEVER implied by admin. Must be a conscious, separate grant. All access is logged.",
+      "id": "pm.cross_tenant",
+      "name": "Cross-Tenant Access",
+      "description": "Access resources across organization boundaries. For platform support staff only.",
+      "risk_level": "critical",
+      "cost_impact": false,
+      "default_grant": false
+    }
+  ],
+
+  "_comment_roles": "Roles bundle permissions for convenience. 'default: true' role is auto-assigned to new users in an org.",
+  "roles": [
+    {
+      "id": "pm-viewer",
+      "name": "Viewer",
+      "description": "Read-only access to projects and tasks",
+      "permissions": [
+        "pm.read.projects",
+        "pm.read.tasks"
+      ],
+      "default": false
+    },
+    {
+      "id": "pm-contributor",
+      "name": "Contributor",
+      "description": "Can create and edit projects, tasks, and comments",
+      "permissions": [
+        "pm.read.projects", "pm.create.projects", "pm.write.projects",
+        "pm.read.tasks", "pm.create.tasks", "pm.write.tasks",
+        "pm.create.comments"
+      ],
+      "default": true
+    },
+    {
+      "id": "pm-manager",
+      "name": "Manager",
+      "description": "Full project control including archive and delete, plus reports",
+      "permissions": [
+        "pm.read.projects", "pm.create.projects", "pm.write.projects", "pm.archive.projects",
+        "pm.read.tasks", "pm.create.tasks", "pm.write.tasks", "pm.delete.tasks",
+        "pm.create.comments", "pm.delete.comments",
+        "pm.read.reports"
+      ],
+      "default": false
+    },
+    {
+      "id": "pm-admin",
+      "name": "Administrator",
+      "description": "Full admin access within org",
+      "permissions": ["pm.admin"],
+      "default": false
+    }
+  ],
+
+  "multi_tenancy": {
+    "isolation_model": "organization",
+    "tenant_field": "org_id",
+    "enforcement": "strict",
+    "cross_tenant_permission": "pm.cross_tenant"
+  }
+}
