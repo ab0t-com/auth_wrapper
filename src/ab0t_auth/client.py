@@ -187,7 +187,7 @@ async def validate_token(
             permissions = tuple(scope.split()) if isinstance(scope, str) and scope else ()
 
         return TokenValidationResponse(
-            valid=data.get("valid", True),
+            valid=data.get("valid", False),
             user_id=data.get("user_id"),
             email=data.get("email"),
             org_id=data.get("org_id"),
@@ -229,11 +229,12 @@ async def validate_api_key(
         data = response.json()
 
         return ApiKeyValidationResponse(
-            valid=True,
+            valid=data.get("valid", False),
             user_id=data.get("user_id"),
             email=data.get("email"),
             org_id=data.get("org_id"),
             permissions=tuple(data.get("permissions", [])),
+            error=data.get("error"),
         )
 
     except httpx.HTTPStatusError as e:
