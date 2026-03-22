@@ -23,6 +23,29 @@ from ab0t_auth.errors import AuthServiceError, map_http_error
 
 
 # =============================================================================
+# Helpers
+# =============================================================================
+
+
+def _safe_permissions(value: Any) -> tuple[str, ...]:
+    """Coerce permissions from response data to a tuple of strings.
+
+    Handles: list, tuple, comma-separated string, None, or missing.
+    Prevents tuple("string") from exploding into individual characters.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(p) for p in value)
+    if isinstance(value, str):
+        # Comma-separated or space-separated string
+        if "," in value:
+            return tuple(p.strip() for p in value.split(",") if p.strip())
+        return tuple(value.split()) if value.strip() else ()
+    return ()
+
+
+# =============================================================================
 # HTTP Client Factory
 # =============================================================================
 
@@ -90,7 +113,7 @@ async def login(
             elif isinstance(scope, list):
                 permissions = tuple(scope)
         elif "permissions" in data:
-            permissions = tuple(data.get("permissions", []))
+            permissions = _safe_permissions(data.get("permissions"))
 
         return LoginResponse(
             access_token=data["access_token"],
@@ -181,7 +204,7 @@ async def validate_token(
 
         permissions: tuple[str, ...] = ()
         if "permissions" in data:
-            permissions = tuple(data.get("permissions", []))
+            permissions = _safe_permissions(data.get("permissions"))
         elif "scope" in data:
             scope = data["scope"]
             permissions = tuple(scope.split()) if isinstance(scope, str) and scope else ()
@@ -233,7 +256,7 @@ async def validate_api_key(
             user_id=data.get("user_id"),
             email=data.get("email"),
             org_id=data.get("org_id"),
-            permissions=tuple(data.get("permissions", [])),
+            permissions=_safe_permissions(data.get("permissions")),
             error=data.get("error"),
         )
 
@@ -336,7 +359,7 @@ async def get_user_permissions(
         response.raise_for_status()
         data = response.json()
 
-        return tuple(data.get("permissions", []))
+        return _safe_permissions(data.get("permissions"))
 
     except httpx.HTTPStatusError as e:
         raise map_http_error(e.response.status_code, str(e)) from e

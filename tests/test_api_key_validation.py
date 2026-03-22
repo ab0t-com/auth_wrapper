@@ -268,8 +268,8 @@ class TestGuardApiKeyFlow:
             assert result.user.token_type == TokenType.API_KEY
 
     @pytest.mark.asyncio
-    async def test_guard_fallback_user_id_on_null(self, auth_config):
-        """When auth service returns valid=true but user_id=null, fallback to 'api_key_user'."""
+    async def test_guard_rejects_null_user_id(self, auth_config):
+        """When auth service returns valid=true but user_id=null, reject the key."""
         guard = AuthGuard(
             auth_url=auth_config.auth_url,
             audience=auth_config.audience,
@@ -288,8 +288,8 @@ class TestGuardApiKeyFlow:
                 guard._http_client = client
                 result = await guard._authenticate_api_key("key_with_no_user")
 
-            assert result.success
-            assert result.user.user_id == "api_key_user"
+            assert not result.success
+            assert result.error_code == "INVALID_API_KEY"
 
 
 # =============================================================================

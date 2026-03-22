@@ -20,7 +20,7 @@ from ab0t_auth.core import (
     PermissionCheckRequest,
     PermissionResult,
 )
-from ab0t_auth.errors import PermissionDeniedError
+from ab0t_auth.errors import AuthServiceError, PermissionDeniedError
 
 
 # =============================================================================
@@ -225,9 +225,25 @@ async def verify_permission(
             return PermissionResult.grant(permission)
         return PermissionResult.deny(permission, response.reason or "Permission denied")
 
-    except Exception:
-        # Fall back to client-side check on error
-        return check_permission(user, permission)
+    except AuthServiceError as e:
+        # Auth service unreachable or erroring.
+        # Behavior depends on config.permission_fallback:
+        #   "deny"   — reject the request (fail-closed, default)
+        #   "client" — fall back to JWT claims (fail-open, maintains availability)
+        import structlog
+        logger = structlog.get_logger("ab0t_auth")
+        logger.warning(
+            "Server-side permission check failed, using fallback",
+            fallback=config.permission_fallback,
+            permission=permission,
+            user_id=user.user_id,
+            error=str(e),
+        )
+        if config.permission_fallback == "client":
+            return check_permission(user, permission)
+        return PermissionResult.deny(
+            permission, "Permission check failed: auth service unavailable"
+        )
 
 
 async def verify_any_permission(

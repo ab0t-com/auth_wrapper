@@ -293,18 +293,23 @@ class Ab0tAuth:
         """
         Check if path should be excluded from authentication.
 
-        Supports exact match and prefix patterns with '*' suffix:
-        - "/health" matches only "/health"
-        - "/api/public/*" matches "/api/public/", "/api/public/anything"
+        Supports exact match and prefix patterns with '*' suffix.
+        Case-insensitive, trailing-slash-normalized, segment-boundary-aware.
         """
+        normalized = path.rstrip("/").lower() or "/"
+
         for pattern in exclude_paths:
-            if pattern.endswith("*"):
-                # Prefix match for patterns ending with *
-                if path.startswith(pattern[:-1]):
+            pat = pattern.rstrip("/").lower() or "/"
+
+            if pat.endswith("*"):
+                prefix = pat[:-1]
+                if normalized.startswith(prefix) and (
+                    len(normalized) == len(prefix)
+                    or normalized[len(prefix) :].startswith("/")
+                ):
                     return True
             else:
-                # Exact match
-                if path == pattern:
+                if normalized == pat:
                     return True
         return False
 
@@ -384,8 +389,14 @@ class Ab0tAuth:
             if not response.valid:
                 return AuthResult.fail("INVALID_API_KEY", response.error or "Invalid API key")
 
+            if not response.user_id:
+                return AuthResult.fail(
+                    "INVALID_API_KEY",
+                    "API key valid but no user identity returned",
+                )
+
             user = AuthenticatedUser(
-                user_id=response.user_id or "api_key_user",
+                user_id=response.user_id,
                 email=response.email,
                 org_id=response.org_id,
                 permissions=response.permissions,

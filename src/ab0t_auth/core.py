@@ -187,6 +187,10 @@ class AuthConfig:
     # - "client": Check JWT claims only (default, fast)
     # - "server": Call /permissions/check endpoint (authoritative, real-time)
     permission_check_mode: Literal["client", "server"] = "client"
+    # Permission fallback on auth service error:
+    # - "deny": Reject the request (fail-closed, recommended for production)
+    # - "client": Fall back to JWT claims (fail-open, maintains availability)
+    permission_fallback: Literal["deny", "client"] = "deny"
 
 
 # =============================================================================

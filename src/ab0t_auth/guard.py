@@ -445,8 +445,14 @@ class AuthGuard:
                     response.error or "Invalid API key",
                 )
 
+            if not response.user_id:
+                return AuthResult.fail(
+                    "INVALID_API_KEY",
+                    "API key valid but no user identity returned",
+                )
+
             user = AuthenticatedUser(
-                user_id=response.user_id or "api_key_user",
+                user_id=response.user_id,
                 email=response.email,
                 org_id=response.org_id,
                 permissions=response.permissions,

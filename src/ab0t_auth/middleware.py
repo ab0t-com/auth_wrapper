@@ -144,14 +144,24 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     def _should_exclude(self, path: str) -> bool:
         """Check if path should be excluded from auth."""
-        # Exact match
-        if path in self.exclude_paths:
-            return True
+        # Normalize: strip trailing slash for comparison, lowercase
+        normalized = path.rstrip("/").lower() or "/"
 
-        # Prefix match (for paths ending with *)
         for exclude in self.exclude_paths:
-            if exclude.endswith("*") and path.startswith(exclude[:-1]):
-                return True
+            pattern = exclude.rstrip("/").lower() or "/"
+
+            if pattern.endswith("*"):
+                # Prefix match — require the prefix to end at a path segment
+                prefix = pattern[:-1]
+                if normalized.startswith(prefix) and (
+                    len(normalized) == len(prefix)
+                    or normalized[len(prefix) :].startswith("/")
+                ):
+                    return True
+            else:
+                # Exact match (case-insensitive, trailing-slash-normalized)
+                if normalized == pattern:
+                    return True
 
         return False
 
