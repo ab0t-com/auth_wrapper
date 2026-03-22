@@ -13,6 +13,12 @@ pip install git+https://github.com/ab0t-com/auth_wrapper.git
 [![License](https://img.shields.io/github/license/ab0t-com/auth_wrapper)](LICENSE)
 [![Tests](https://img.shields.io/github/actions/workflow/status/ab0t-com/auth_wrapper/tests.yml)](https://github.com/ab0t-com/auth_wrapper/actions)
 
+**Using Claude Code?** Install the auth skills so your agent knows how to integrate auth automatically:
+```bash
+curl -sSL https://raw.githubusercontent.com/ab0t-com/auth_wrapper/main/install_skills.sh | bash
+```
+> After installing, restart Claude Code to pick up the new skills. Then prompt: *"use the auth skills to [your task] using the skill tool"*
+
 ---
 
 ## Why Ab0t Auth?
