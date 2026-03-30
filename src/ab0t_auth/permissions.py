@@ -191,12 +191,17 @@ async def verify_permission(
     resource_id: str | None = None,
     resource_type: str | None = None,
     cache: PermissionCache | None = None,
+    api_key: str | None = None,
 ) -> PermissionResult:
     """
     Verify permission with server (authoritative check).
 
     Async function for server-side verification.
     Falls back to client-side if server unavailable.
+
+    Supports both Bearer token and API key authentication:
+    - If api_key is provided, uses X-API-Key header for the permission check
+    - Otherwise, uses Authorization: Bearer header with token
     """
     # Check cache first
     if cache:
@@ -215,7 +220,7 @@ async def verify_permission(
     )
 
     try:
-        response = await check_permission_remote(client, config, token, request)
+        response = await check_permission_remote(client, config, token, request, api_key=api_key)
 
         # Update cache
         if cache:
@@ -254,6 +259,7 @@ async def verify_any_permission(
     *permissions: str,
     resource_id: str | None = None,
     cache: PermissionCache | None = None,
+    api_key: str | None = None,
 ) -> PermissionResult:
     """
     Verify if user has any of the specified permissions (server-side).
@@ -265,6 +271,7 @@ async def verify_any_permission(
             client, config, token, user, perm,
             resource_id=resource_id,
             cache=cache,
+            api_key=api_key,
         )
         if result.allowed:
             return result
@@ -283,6 +290,7 @@ async def verify_all_permissions(
     *permissions: str,
     resource_id: str | None = None,
     cache: PermissionCache | None = None,
+    api_key: str | None = None,
 ) -> PermissionResult:
     """
     Verify if user has all specified permissions (server-side).
@@ -294,6 +302,7 @@ async def verify_all_permissions(
             client, config, token, user, perm,
             resource_id=resource_id,
             cache=cache,
+            api_key=api_key,
         )
         if not result.allowed:
             return result

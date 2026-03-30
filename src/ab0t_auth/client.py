@@ -278,11 +278,17 @@ async def check_permission(
     config: AuthConfig,
     token: str,
     request: PermissionCheckRequest,
+    *,
+    api_key: str | None = None,
 ) -> PermissionCheckResponse:
     """
     Check if user has a specific permission.
 
     Server-side authoritative permission check.
+
+    Supports both Bearer token and API key authentication:
+    - If api_key is provided, uses X-API-Key header
+    - Otherwise, uses Authorization: Bearer header with token
     """
     payload: dict[str, Any] = {
         "user_id": request.user_id,
@@ -296,12 +302,23 @@ async def check_permission(
         payload["resource_type"] = request.resource_type
 
     try:
-        # Token may already include "Bearer " prefix from the Authorization header
-        auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
+        # Support both Bearer token and API key authentication
+        # Priority: token > api_key (consistent with authentication order)
+        if token:
+            auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
+            headers = {"Authorization": auth_header}
+        elif api_key:
+            headers = {config.api_key_header: api_key}
+        else:
+            raise AuthServiceError(
+                "No credentials for permission check",
+                service_url=config.auth_url,
+            )
+
         response = await client.post(
             f"{config.auth_url}/permissions/check",
             json=payload,
-            headers={"Authorization": auth_header},
+            headers=headers,
         )
         response.raise_for_status()
         data = response.json()

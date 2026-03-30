@@ -244,6 +244,7 @@ def require_permission(
                 user,
                 permission,
                 cache=guard._permission_cache,
+                api_key=api_key,  # Pass API key for X-API-Key auth
             )
         else:
             # Client-side check from JWT claims (default)
@@ -307,6 +308,7 @@ def require_any_permission(
                 user,
                 *permissions,
                 cache=guard._permission_cache,
+                api_key=api_key,  # Pass API key for X-API-Key auth
             )
         else:
             # Client-side check from JWT claims (default)
@@ -370,6 +372,7 @@ def require_all_permissions(
                 user,
                 *permissions,
                 cache=guard._permission_cache,
+                api_key=api_key,  # Pass API key for X-API-Key auth
             )
         else:
             # Client-side check from JWT claims (default)
