@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ab0t-auth"
-version = "0.1.0"
+version = "0.1.1"
 description = "Authentication and authorization library for FastAPI and Flask using Ab0t auth service"
 readme = "README.md"
 license = "MIT"
