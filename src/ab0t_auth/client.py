@@ -287,8 +287,8 @@ async def check_permission(
     Server-side authoritative permission check.
 
     Supports both Bearer token and API key authentication:
-    - If api_key is provided, uses X-API-Key header
-    - Otherwise, uses Authorization: Bearer header with token
+    - If token is provided, uses Authorization: Bearer header with token
+    - If api_key is provided (and no token), sends API key as Bearer token
     """
     payload: dict[str, Any] = {
         "user_id": request.user_id,
@@ -304,11 +304,12 @@ async def check_permission(
     try:
         # Support both Bearer token and API key authentication
         # Priority: token > api_key (consistent with authentication order)
+        # Note: API key is sent as Bearer token since /permissions/check uses HTTPBearer
         if token:
             auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
             headers = {"Authorization": auth_header}
         elif api_key:
-            headers = {config.api_key_header: api_key}
+            headers = {"Authorization": f"Bearer {api_key}"}
         else:
             raise AuthServiceError(
                 "No credentials for permission check",

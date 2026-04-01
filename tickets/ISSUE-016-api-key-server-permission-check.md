@@ -87,11 +87,12 @@ async def dependency(...):
 ```python
 # In client.py check_permission():
 # Support both Bearer token and API key for authenticating the permission check request
+# API key is sent as Bearer token since /permissions/check uses HTTPBearer security scheme
 if token:
     auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
     headers = {"Authorization": auth_header}
 elif api_key:
-    headers = {"X-API-Key": api_key}
+    headers = {"Authorization": f"Bearer {api_key}"}
 else:
     raise AuthError("No credentials for permission check")
 ```

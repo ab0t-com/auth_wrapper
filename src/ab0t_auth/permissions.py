@@ -200,8 +200,8 @@ async def verify_permission(
     Falls back to client-side if server unavailable.
 
     Supports both Bearer token and API key authentication:
-    - If api_key is provided, uses X-API-Key header for the permission check
-    - Otherwise, uses Authorization: Bearer header with token
+    - If token is provided, uses Authorization: Bearer header with token
+    - If api_key is provided (and no token), sends API key as Bearer token
     """
     # Check cache first
     if cache:

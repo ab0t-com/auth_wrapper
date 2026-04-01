@@ -837,17 +837,18 @@ class TestEndToEndApiKeyServerMode:
             )
 
             # Mock permission check endpoint
-            # After fix: should receive X-API-Key header and succeed
+            # After fix: should receive Authorization: Bearer {api_key} and succeed
             def check_permission_handler(request):
-                # Check if API key is in headers (after fix)
-                if request.headers.get("X-API-Key"):
+                auth_header = request.headers.get("Authorization", "")
+                # After fix: API key sent as Bearer token
+                if auth_header == "Bearer e2e_test_key":
                     return httpx.Response(200, json={
                         "allowed": True,
                         "permission": "data:read",
                         "user_id": "e2e_service_123",
                     })
                 # Bug: receives empty Bearer token
-                elif request.headers.get("Authorization") == "Bearer ":
+                elif auth_header == "Bearer ":
                     return httpx.Response(401, json={
                         "error": "Invalid or missing authorization token"
                     })
