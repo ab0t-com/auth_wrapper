@@ -7,6 +7,7 @@ Similar to slowapi's Limiter - provides the main interface for the library.
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal
 
@@ -141,8 +142,69 @@ class AuthGuard:
         self._logger = get_logger("ab0t_auth.guard")
         self._metrics = AuthMetrics()
 
+        # Fail-closed: audience verification must not be silently disabled in prod.
+        self._enforce_audience_security()
+
         # State tracking
         self._initialized = False
+
+    # Environments in which an audience-less configuration is a hard error.
+    _PRODLIKE_ENVIRONMENTS = ("production", "prod", "staging")
+
+    def _enforce_audience_security(self) -> None:
+        """Guard against silently accepting ANY audience.
+
+        When ``audience`` is unset (or ``verify_aud`` is False), PyJWT does NOT
+        check the token's ``aud`` claim (see ``validate_token_local`` /
+        ``jwt.py``: ``verify_aud = verify_aud and audience is not None``). The
+        audience claim is the boundary that stops a JWT minted for ANOTHER mesh
+        service being replayed against this one — with it off, any validly-signed
+        token from any service in the mesh is accepted as this service's caller.
+
+        Two-tier, deliberately NON-BREAKING on upgrade:
+
+        * ALWAYS: emit a loud warning when audience verification is disabled, so
+          the exposure is visible in every environment.
+        * FAIL-CLOSED: raise ``ConfigurationError`` at construction ONLY when the
+          service declares a production/staging environment (the ambient
+          ``ENVIRONMENT`` / ``AB0T_AUTH_ENVIRONMENT`` the service already sets)
+          and ``AB0T_AUTH_DEBUG`` is not set. A dev/test/unset environment is
+          warn-only, so existing consumers are not broken by upgrading the library
+          — only a prod deployment that forgot its audience is stopped.
+
+        Set the service's audience (``AB0T_AUTH_AUDIENCE`` / ``audience=``) to
+        clear this. It is a no-op once audience verification is on.
+        """
+        cfg = self._config
+        if cfg.verify_aud and cfg.audience is not None:
+            return  # audience is verified — safe, nothing to do
+
+        # Audience verification is OFF — always make it visible.
+        self._logger.warning(
+            "audience_verification_disabled",
+            detail=(
+                "JWT audience is NOT verified (no audience configured). Tokens from "
+                "any mesh service will be accepted as this service's caller. Set "
+                "AB0T_AUTH_AUDIENCE to this service's audience. This is a hard error "
+                "when ENVIRONMENT is production/staging."
+            ),
+        )
+
+        env = (
+            os.getenv("AB0T_AUTH_ENVIRONMENT")
+            or os.getenv("ENVIRONMENT")
+            or ""
+        ).strip().lower()
+        debug = bool(cfg.debug) or os.getenv("AB0T_AUTH_DEBUG", "").lower() == "true"
+        if env in self._PRODLIKE_ENVIRONMENTS and not debug:
+            raise ConfigurationError(
+                "JWT audience verification is DISABLED (no audience configured) in a "
+                f"{env} environment: a token minted for ANY mesh service would be "
+                "accepted as this service's caller. Set this service's audience "
+                "(AB0T_AUTH_AUDIENCE / audience=...). Audience validation may only be "
+                "skipped outside production.",
+                config_key="audience",
+            )
 
     # =========================================================================
     # Properties

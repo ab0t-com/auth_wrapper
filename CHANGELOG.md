@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security Fixes
 
+- **HIGH: JWT audience verification can no longer be silently disabled in production** (`guard.py`) — ISSUE-017
+  - When no `audience` was configured, `validate_token_local` set the PyJWT `verify_aud` option to `False`
+    (`verify_aud = verify_aud and audience is not None`), so a token minted for **any** mesh service was
+    accepted as this service's caller — cross-service token confusion
+  - New `AuthGuard._enforce_audience_security()` runs at construction: it **always warns** when audience
+    verification is off, and **fails closed** (`ConfigurationError`) when `ENVIRONMENT` /
+    `AB0T_AUTH_ENVIRONMENT` is `production`/`prod`/`staging` and `AB0T_AUTH_DEBUG` is not set
+  - Deliberately **non-breaking on upgrade**: dev/test/unset environments are warn-only; only a production
+    deployment with no audience is stopped. Mirrors the auth-bypass defense-in-depth
+  - **Rollout:** each mesh consumer must set `AB0T_AUTH_AUDIENCE` before this reaches its prod environment
+  - Reported by: Resource-service security audit (R-M2)
+
 - **CRITICAL: API key validation no longer hardcodes `valid=True`** (`client.py`)
   - `validate_api_key()` previously ignored the `valid` field from the auth service response and hardcoded `True` for any HTTP 200 — meaning **any string** as `X-API-Key` was accepted
   - Now reads `data.get("valid", False)` — fail-closed
