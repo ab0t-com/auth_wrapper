@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Audience-verification safety net on `AuthGuard`** (`guard.py`) — ISSUE-017
+  - **Context (the exposure):** when no `audience` is configured, `validate_token_local` sets PyJWT's
+    `verify_aud` option to `False` (`verify_aud = verify_aud and audience is not None`), so a token minted
+    for **any** mesh service is accepted as this service's caller — silent cross-service token confusion.
+  - **Always-on warning (non-breaking):** `AuthGuard` now logs a loud `warning` event
+    (`audience_verification_disabled`) at construction whenever audience verification is off. Construction
+    still succeeds — **no behaviour change for existing consumers.**
+  - **Opt-in fail-closed:** new constructor kwarg `require_audience: bool = False` and env var
+    `AB0T_AUTH_REQUIRE_AUDIENCE`. When enabled, an audience-less configuration raises `ConfigurationError`
+    at construction. **Off by default** (mirrors the opt-in auth-bypass philosophy — the stricter posture is
+    never imposed). Recommended `AB0T_AUTH_REQUIRE_AUDIENCE=true` in production once `AB0T_AUTH_AUDIENCE` is set.
+  - Backward compatible (minor): existing `AuthGuard(...)` calls are unchanged; only new optional surface is
+    added. Making `require_audience` default `True` would be a future, separately-documented **major** change.
+  - Reported by: Resource-service security audit (R-M2).
+
 ### Security Fixes
 
 - **CRITICAL: API key validation no longer hardcodes `valid=True`** (`client.py`)
