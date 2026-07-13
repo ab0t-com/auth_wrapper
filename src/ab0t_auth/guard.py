@@ -93,6 +93,7 @@ class AuthGuard:
         issuer: str | None = None,
         debug: bool = False,
         permission_check_mode: Literal["client", "server"] = "client",
+        require_audience: bool = False,
     ) -> None:
         """
         Initialize AuthGuard.
@@ -105,6 +106,11 @@ class AuthGuard:
             audience: Expected JWT audience
             issuer: Expected JWT issuer
             debug: Enable debug logging
+            require_audience: Opt-in fail-closed. When True (or the env var
+                ``AB0T_AUTH_REQUIRE_AUDIENCE=true`` is set), constructing the guard
+                without a verified audience raises ``ConfigurationError`` instead of
+                running with audience verification disabled. Default False preserves
+                existing behaviour; a loud warning is emitted either way.
         """
         # Build configuration
         if config:
@@ -142,17 +148,15 @@ class AuthGuard:
         self._logger = get_logger("ab0t_auth.guard")
         self._metrics = AuthMetrics()
 
-        # Fail-closed: audience verification must not be silently disabled in prod.
-        self._enforce_audience_security()
+        # Surface (and, if opted in, refuse) a silently-disabled audience check.
+        self._require_audience = require_audience
+        self._warn_or_require_audience()
 
         # State tracking
         self._initialized = False
 
-    # Environments in which an audience-less configuration is a hard error.
-    _PRODLIKE_ENVIRONMENTS = ("production", "prod", "staging")
-
-    def _enforce_audience_security(self) -> None:
-        """Guard against silently accepting ANY audience.
+    def _warn_or_require_audience(self) -> None:
+        """Surface a silently-disabled JWT audience check.
 
         When ``audience`` is unset (or ``verify_aud`` is False), PyJWT does NOT
         check the token's ``aud`` claim (see ``validate_token_local`` /
@@ -161,16 +165,16 @@ class AuthGuard:
         service being replayed against this one — with it off, any validly-signed
         token from any service in the mesh is accepted as this service's caller.
 
-        Two-tier, deliberately NON-BREAKING on upgrade:
+        BACKWARD-COMPATIBLE by design — the default never changes existing behaviour:
 
         * ALWAYS: emit a loud warning when audience verification is disabled, so
-          the exposure is visible in every environment.
-        * FAIL-CLOSED: raise ``ConfigurationError`` at construction ONLY when the
-          service declares a production/staging environment (the ambient
-          ``ENVIRONMENT`` / ``AB0T_AUTH_ENVIRONMENT`` the service already sets)
-          and ``AB0T_AUTH_DEBUG`` is not set. A dev/test/unset environment is
-          warn-only, so existing consumers are not broken by upgrading the library
-          — only a prod deployment that forgot its audience is stopped.
+          the exposure is visible. Construction still succeeds (default).
+        * OPT-IN fail-closed: if ``require_audience=True`` (constructor) or the env
+          var ``AB0T_AUTH_REQUIRE_AUDIENCE=true`` is set, raise ``ConfigurationError``
+          instead of running audience-less. This is off by default so upgrading the
+          library cannot break any existing consumer; a security-conscious service
+          (or a deployment's prod config) opts in explicitly — mirroring how the
+          auth-bypass feature is opt-in rather than imposed.
 
         Set the service's audience (``AB0T_AUTH_AUDIENCE`` / ``audience=``) to
         clear this. It is a no-op once audience verification is on.
@@ -179,30 +183,27 @@ class AuthGuard:
         if cfg.verify_aud and cfg.audience is not None:
             return  # audience is verified — safe, nothing to do
 
-        # Audience verification is OFF — always make it visible.
+        # Audience verification is OFF — always make it visible (non-breaking).
         self._logger.warning(
             "audience_verification_disabled",
             detail=(
                 "JWT audience is NOT verified (no audience configured). Tokens from "
                 "any mesh service will be accepted as this service's caller. Set "
-                "AB0T_AUTH_AUDIENCE to this service's audience. This is a hard error "
-                "when ENVIRONMENT is production/staging."
+                "AB0T_AUTH_AUDIENCE to this service's audience, or set "
+                "AB0T_AUTH_REQUIRE_AUDIENCE=true to make this a hard error."
             ),
         )
 
-        env = (
-            os.getenv("AB0T_AUTH_ENVIRONMENT")
-            or os.getenv("ENVIRONMENT")
-            or ""
-        ).strip().lower()
-        debug = bool(cfg.debug) or os.getenv("AB0T_AUTH_DEBUG", "").lower() == "true"
-        if env in self._PRODLIKE_ENVIRONMENTS and not debug:
+        require = self._require_audience or (
+            os.getenv("AB0T_AUTH_REQUIRE_AUDIENCE", "").lower() == "true"
+        )
+        if require:
             raise ConfigurationError(
-                "JWT audience verification is DISABLED (no audience configured) in a "
-                f"{env} environment: a token minted for ANY mesh service would be "
-                "accepted as this service's caller. Set this service's audience "
-                "(AB0T_AUTH_AUDIENCE / audience=...). Audience validation may only be "
-                "skipped outside production.",
+                "JWT audience verification is DISABLED (no audience configured) but "
+                "audience is required (require_audience / AB0T_AUTH_REQUIRE_AUDIENCE): "
+                "a token minted for ANY mesh service would otherwise be accepted as "
+                "this service's caller. Set this service's audience "
+                "(AB0T_AUTH_AUDIENCE / audience=...).",
                 config_key="audience",
             )
 

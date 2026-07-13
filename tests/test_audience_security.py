@@ -1,21 +1,24 @@
 """
-Tests for the audience-verification fail-closed guard (AuthGuard).
+Tests for the audience-verification safety net (AuthGuard).
 
 Security finding (resource-service audit R-M2, 2026-07): when ``audience`` is
-unset, PyJWT does NOT verify the token's ``aud`` claim
-(``validate_token_local``: ``verify_aud = verify_aud and audience is not None``),
-so a JWT minted for ANY mesh service is accepted as this service's caller. This
-is a library-wide exposure — every consumer that constructs an AuthGuard without
-an audience is affected.
+unset, PyJWT does NOT verify the token's ``aud`` claim (``validate_token_local``:
+``verify_aud = verify_aud and audience is not None``), so a JWT minted for ANY
+mesh service is accepted as this service's caller. This is a library-wide
+exposure — every consumer that constructs an AuthGuard without an audience is
+affected — and, before this change, it happened silently.
 
-The fix is deliberately NON-BREAKING on upgrade: it ALWAYS warns when audience
-verification is disabled, but only RAISES ``ConfigurationError`` when the service
-declares a production/staging environment (ambient ``ENVIRONMENT`` /
-``AB0T_AUTH_ENVIRONMENT``) and ``AB0T_AUTH_DEBUG`` is not set. A dev/test/unset
-environment is warn-only, so existing consumers keep working.
+The fix is BACKWARD-COMPATIBLE (additive):
+  * ALWAYS: a loud warning is logged when audience verification is disabled.
+    Construction still succeeds — the default behaviour is unchanged, so upgrading
+    the library cannot break any existing consumer.
+  * OPT-IN fail-closed: ``require_audience=True`` (constructor) or the env var
+    ``AB0T_AUTH_REQUIRE_AUDIENCE=true`` turns the audience-less configuration into
+    a hard ``ConfigurationError`` at construction. Off by default, mirroring how
+    auth-bypass is opt-in rather than imposed.
 
-Negative-control law: the prod-refusal assertion fails if
-``_enforce_audience_security`` is reverted to a no-op.
+Negative-control law: the opt-in-refusal assertions fail if
+``_warn_or_require_audience`` is reverted to a no-op.
 """
 import pytest
 
@@ -28,50 +31,53 @@ URL = "https://auth.service.ab0t.com"
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    # Ensure no ambient env leaks into the tests.
-    for k in ("AB0T_AUTH_DEBUG", "AB0T_AUTH_BYPASS", "ENVIRONMENT", "AB0T_AUTH_ENVIRONMENT"):
+    for k in ("AB0T_AUTH_DEBUG", "AB0T_AUTH_BYPASS", "AB0T_AUTH_REQUIRE_AUDIENCE"):
         monkeypatch.delenv(k, raising=False)
 
 
-class TestAudienceSecurity:
-    @pytest.mark.parametrize("env", ["production", "prod", "staging"])
-    def test_prodlike_without_audience_is_refused(self, monkeypatch, env):
-        """The core control: no audience in a prod-like env => refuse to construct.
-        RED if the guard is reverted (constructs wide open)."""
-        monkeypatch.setenv("ENVIRONMENT", env)
-        with pytest.raises(ConfigurationError) as ei:
-            AuthGuard(auth_url=URL)  # audience defaults to None
-        assert ei.value.details == {"config_key": "audience"}
+class TestAudienceBackwardCompatible:
+    """The DEFAULT must not change: audience-less construction still succeeds."""
 
-    def test_prod_via_ab0t_env_var_also_refused(self, monkeypatch):
-        """The AB0T_AUTH_ENVIRONMENT signal is honored the same as ENVIRONMENT."""
-        monkeypatch.setenv("AB0T_AUTH_ENVIRONMENT", "production")
-        with pytest.raises(ConfigurationError):
-            AuthGuard(auth_url=URL)
+    def test_default_no_audience_still_constructs(self):
+        """No audience + no opt-in => constructs (warn-only). This is the contract
+        every existing consumer relies on; it must not regress."""
+        guard = AuthGuard(auth_url=URL)  # audience defaults to None
+        assert guard.config.audience is None
 
-    def test_prodlike_with_audience_constructs(self, monkeypatch):
-        """Fix does not over-block: a configured audience constructs fine in prod."""
-        monkeypatch.setenv("ENVIRONMENT", "production")
+    def test_default_with_audience_constructs(self):
         guard = AuthGuard(auth_url=URL, audience=AUD)
         assert guard.config.audience == AUD
         assert guard.config.verify_aud is True
 
-    def test_prod_with_debug_is_allowed(self, monkeypatch):
-        """DEBUG escape hatch: audience-less is permitted even in prod when
-        AB0T_AUTH_DEBUG=true (dev-on-prod-config), matching the bypass pattern."""
-        monkeypatch.setenv("ENVIRONMENT", "production")
-        monkeypatch.setenv("AB0T_AUTH_DEBUG", "true")
-        guard = AuthGuard(auth_url=URL)
-        assert guard.config.audience is None
 
-    def test_dev_without_audience_is_allowed_warn_only(self):
-        """NON-BREAKING: a dev/unset environment is warn-only, never a hard error —
-        so existing consumers are not broken by upgrading the library."""
-        guard = AuthGuard(auth_url=URL)  # no ENVIRONMENT, no audience
-        assert guard.config.audience is None
+class TestAudienceOptInStrict:
+    """require_audience is an OPT-IN fail-closed knob."""
 
-    def test_prodlike_with_multi_audience_tuple_constructs(self, monkeypatch):
-        """A tuple audience (multi-aud service) also satisfies the guard in prod."""
-        monkeypatch.setenv("ENVIRONMENT", "production")
-        guard = AuthGuard(auth_url=URL, audience=(AUD, "LOCAL:other"))
+    def test_require_audience_kwarg_without_audience_raises(self):
+        """The core control: opt-in strict + no audience => refuse to construct.
+        RED if the guard is reverted to a no-op."""
+        with pytest.raises(ConfigurationError) as ei:
+            AuthGuard(auth_url=URL, require_audience=True)
+        assert ei.value.details == {"config_key": "audience"}
+
+    def test_require_audience_env_without_audience_raises(self, monkeypatch):
+        """The AB0T_AUTH_REQUIRE_AUDIENCE env var is an equivalent opt-in signal."""
+        monkeypatch.setenv("AB0T_AUTH_REQUIRE_AUDIENCE", "true")
+        with pytest.raises(ConfigurationError):
+            AuthGuard(auth_url=URL)
+
+    def test_require_audience_with_audience_constructs(self):
+        """Opt-in strict does not over-block once an audience is configured."""
+        guard = AuthGuard(auth_url=URL, audience=AUD, require_audience=True)
+        assert guard.config.audience == AUD
+
+    def test_require_audience_with_tuple_audience_constructs(self):
+        """A tuple audience (multi-aud service) satisfies the strict check."""
+        guard = AuthGuard(auth_url=URL, audience=(AUD, "LOCAL:other"), require_audience=True)
         assert guard.config.audience == (AUD, "LOCAL:other")
+
+    def test_require_audience_env_false_does_not_opt_in(self, monkeypatch):
+        """Only an explicit 'true' opts in; other values leave the default (no raise)."""
+        monkeypatch.setenv("AB0T_AUTH_REQUIRE_AUDIENCE", "false")
+        guard = AuthGuard(auth_url=URL)  # not opted in
+        assert guard.config.audience is None

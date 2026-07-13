@@ -51,44 +51,61 @@ gated behind a defense-in-depth flag (`load_bypass_config()` requires `AB0T_AUTH
 
 ## Fix
 
-`src/ab0t_auth/guard.py` — new `AuthGuard._enforce_audience_security()`, called at construction.
-Deliberately **non-breaking on upgrade**, two tiers:
+`src/ab0t_auth/guard.py` — new `AuthGuard._warn_or_require_audience()`, called at construction. Designed as
+a **backward-compatible, additive** change (no contract break — a minor-version feature, not a breaking one):
 
 1. **Always** emit a loud `logger.warning("audience_verification_disabled", …)` whenever audience
-   verification is off — so the exposure is visible in every environment.
-2. **Fail closed** (`raise ConfigurationError`) **only** when the service declares a production/staging
-   environment via `ENVIRONMENT` / `AB0T_AUTH_ENVIRONMENT` **and** `AB0T_AUTH_DEBUG` is not set. A
-   dev/test/unset environment is warn-only, so upgrading the library does not break existing consumers —
-   only a *production deployment that forgot its audience* is stopped at boot.
+   verification is off. **Construction still succeeds by default** — the historical behaviour is preserved,
+   so upgrading the library cannot break any existing consumer.
+2. **Opt-in fail-closed** — a new constructor kwarg `require_audience: bool = False` **and** env var
+   `AB0T_AUTH_REQUIRE_AUDIENCE=true`. When either is set, an audience-less configuration raises
+   `ConfigurationError` at construction. Off by default.
 
-Mirrors the existing bypass defense-in-depth: the dangerous mode is only reachable behind an explicit
-signal. Clearing it is one line — set the service's audience (`AB0T_AUTH_AUDIENCE` / `audience=`).
+This mirrors the auth-bypass philosophy correctly: the stricter/dangerous posture is **opt-in**, never
+imposed. A security-conscious service (or a deployment's prod config) turns `AB0T_AUTH_REQUIRE_AUDIENCE=true`
+on to get the fail-closed guarantee; everyone else gets the visibility of the warning with zero behaviour
+change. Clearing the warning entirely is one line — set the service's audience (`AB0T_AUTH_AUDIENCE` /
+`audience=`).
 
-### Why not fail hard regardless of environment?
+### Why additive rather than a stricter default?
 
-A first draft raised whenever `AB0T_AUTH_DEBUG` was absent. That broke **19** of the library's own tests,
-which legitimately construct audience-less guards in unit tests. The shipped, env-gated form keeps the full
-suite green.
+The wrapper is used by many services; `AuthGuard(auth_url=...)` with no audience has always constructed
+successfully (the library's own tests do so 19×). Making that raise — even gated on an ambient `ENVIRONMENT`
+var the library did not previously read — is a silent contract change that would fail existing prod
+deployments on a patch bump. Per best-practice engineering, a behaviour break must be a deliberate,
+documented, version-gated contract change. This PR ships the safe, non-breaking layer (warn + opt-in);
+if the team later wants `require_audience` to default `True`, that is a documented **major** release with a
+migration note — the maintainers' call, not a side effect of a security patch.
+
+### Public API surface added (backward compatible)
+
+- `AuthGuard(..., require_audience: bool = False)` — new optional kwarg.
+- `AB0T_AUTH_REQUIRE_AUDIENCE` — new env var (read directly in the guard; covers `settings=`/env-driven
+  construction without touching the frozen `AuthConfig`/`AuthSettings`).
+- A new `warning` log event `audience_verification_disabled`.
 
 ## Testing
 
-`tests/test_audience_security.py` (8 tests):
+`tests/test_audience_security.py` (7 tests):
 
-- Prod-like env (`ENVIRONMENT` ∈ {production, prod, staging}) + no audience → `ConfigurationError` (RED if
-  the guard is reverted to a no-op: the 4 prod-refusal cases stop raising).
-- Prod-like env + audience set (str or tuple) → constructs fine (no over-block).
-- Prod-like env + `AB0T_AUTH_DEBUG=true` → allowed (escape hatch, matches bypass).
-- Dev / unset env + no audience → allowed, warn-only (non-breaking).
+- **Backward-compat:** no audience + no opt-in → constructs (warn-only); with audience → constructs. These
+  pin the contract existing consumers rely on.
+- **Opt-in strict:** `require_audience=True` (kwarg) or `AB0T_AUTH_REQUIRE_AUDIENCE=true` (env) + no audience
+  → `ConfigurationError` (RED if the guard is reverted to a no-op); with audience (str or tuple) → constructs;
+  `=false` env does not opt in.
 
-Full suite: **466 passed** (with `flask` + `respx` installed so nothing is skipped) — the fix adds no
-regressions.
+Full suite: **465 passed** (with `flask` + `respx` installed so nothing is skipped) — no regressions; every
+existing audience-less construction test still passes because the default is unchanged.
 
-## Rollout note (IMPORTANT — coordinated release)
+## Rollout note (non-breaking)
 
-Because prod services set `ENVIRONMENT`, a service running in production **with no audience configured will
-now fail fast at boot**. That is the intended behavior, but it means each mesh consumer must set its
-`AB0T_AUTH_AUDIENCE` **before** this release reaches its production environment. Recommend confirming
-audience is set for every consumer, then releasing.
+Nothing is forced. On upgrade, consumers that already set `AB0T_AUTH_AUDIENCE` see no change; consumers
+without it get a new loud warning at startup. To adopt the guarantee, a service sets
+`AB0T_AUTH_REQUIRE_AUDIENCE=true` (recommended for prod) **after** confirming its `AB0T_AUTH_AUDIENCE` is set.
+A fleet audit of `production/.env.production` across the mesh (2026-07-13) found audience set for every
+wrapper-consuming service (billing/banking/integration/payment/resource/sandbox-platform/schema/tool
+explicitly; audit via its config default) — so enabling `AB0T_AUTH_REQUIRE_AUDIENCE` is currently safe
+everywhere.
 
 ## Reported by
 
