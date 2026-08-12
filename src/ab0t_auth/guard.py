@@ -7,7 +7,9 @@ Similar to slowapi's Limiter - provides the main interface for the library.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Literal
 
 import httpx
@@ -56,6 +58,45 @@ from ab0t_auth.permissions import (
     check_permission,
     require_permission_or_raise,
 )
+
+
+# =============================================================================
+# Revocation event support (opt-in)
+# =============================================================================
+
+# Field-name aliases accepted on a revocation event payload. The auth service
+# is the event owner; dispatching on the fields present (rather than a rigid
+# enum) keeps the mapper tolerant of minor producer differences.
+_REVOCATION_TYPE_KEYS = ("type", "event", "event_type")
+_REVOCATION_USER_KEYS = ("user_id", "userId", "sub", "subject")
+_REVOCATION_TOKEN_KEYS = ("token", "access_token")
+
+# Event types (or an explicit ``all: true``) that flush every cache.
+_REVOCATION_CLEAR_ALL_EVENTS = frozenset({"caches.clear", "cache.clear", "auth.reset"})
+
+
+@dataclass(frozen=True, slots=True)
+class RevocationResult:
+    """
+    Summary of the cache invalidation performed for a revocation event.
+
+    Returned by :meth:`AuthGuard.on_revocation_event`. ``handled`` is True
+    when at least one cache was invalidated.
+    """
+
+    event_type: str | None
+    token_invalidated: bool = False
+    permissions_invalidated: int = 0
+    caches_cleared: bool = False
+
+    @property
+    def handled(self) -> bool:
+        """True if the event caused any cache invalidation."""
+        return (
+            self.token_invalidated
+            or self.permissions_invalidated > 0
+            or self.caches_cleared
+        )
 
 
 class AuthGuard:
@@ -523,6 +564,96 @@ class AuthGuard:
         self._token_cache.clear()
         self._permission_cache.clear()
         self._jwks_cache.clear()
+
+    @staticmethod
+    def _extract_revocation_field(
+        event: Mapping[str, Any],
+        keys: tuple[str, ...],
+    ) -> str | None:
+        """Return the first non-empty string value among ``keys`` (or None)."""
+        for key in keys:
+            value = event.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def on_revocation_event(self, event: Mapping[str, Any]) -> RevocationResult:
+        """
+        Apply an auth revocation/mutation event to the local caches (opt-in).
+
+        Bridges a revocation event emitted by the auth service to the existing
+        ``invalidate_*`` methods, so a consumer does not have to wait for cache
+        TTL for a revocation to take effect. This is a convenience mapper only:
+        it performs no network I/O and adds no new caching behaviour. Consumers
+        that never call it are completely unaffected — TTL remains the backstop.
+
+        The auth service owns the event contract. Recognised (canonical) event
+        types include ``permission.revoked``, ``permission.granted``,
+        ``user.suspended``, ``apikey.revoked``, ``org.changed`` and
+        ``token.revoked``. Dispatch is on the fields present, so the mapper is
+        tolerant of minor producer differences:
+
+        * a raw ``token`` field            -> :meth:`invalidate_token`
+        * a ``user_id`` (or ``sub``) field -> :meth:`invalidate_user_permissions`
+        * a global-flush event type        -> :meth:`clear_caches`
+
+        Note: the token cache is keyed by a hash of the token, so an event that
+        only carries a ``user_id`` (e.g. ``user.suspended``) invalidates that
+        user's cached permission results but cannot drop their cached token
+        entry (there is no raw token to hash). That entry still expires by its
+        short TTL; a consumer needing instant suspension should additionally
+        stop reading suspension state from a frozen JWT claim.
+
+        Malformed or unrecognised events are ignored (never raised) so a bad
+        event cannot break a consumer's subscription loop; the returned
+        :class:`RevocationResult` reports whether anything was invalidated.
+
+        Args:
+            event: A mapping describing the revocation/mutation.
+
+        Returns:
+            RevocationResult summarising which caches were invalidated.
+        """
+        event_type = self._extract_revocation_field(event, _REVOCATION_TYPE_KEYS)
+
+        token_invalidated = False
+        permissions_invalidated = 0
+        caches_cleared = False
+
+        if event_type in _REVOCATION_CLEAR_ALL_EVENTS or bool(event.get("all")):
+            self.clear_caches()
+            caches_cleared = True
+        else:
+            token = self._extract_revocation_field(event, _REVOCATION_TOKEN_KEYS)
+            if token:
+                token_invalidated = self.invalidate_token(token)
+
+            user_id = self._extract_revocation_field(event, _REVOCATION_USER_KEYS)
+            if user_id:
+                permissions_invalidated = self.invalidate_user_permissions(user_id)
+
+        result = RevocationResult(
+            event_type=event_type,
+            token_invalidated=token_invalidated,
+            permissions_invalidated=permissions_invalidated,
+            caches_cleared=caches_cleared,
+        )
+
+        if result.handled:
+            self._logger.info(
+                "Applied auth revocation event",
+                event_type=event_type,
+                token_invalidated=token_invalidated,
+                permissions_invalidated=permissions_invalidated,
+                caches_cleared=caches_cleared,
+            )
+        else:
+            self._logger.debug(
+                "Revocation event had no applicable cache target",
+                event_type=event_type,
+            )
+
+        return result
 
     # =========================================================================
     # Utility Methods
