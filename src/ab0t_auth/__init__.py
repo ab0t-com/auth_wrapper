@@ -36,7 +36,7 @@ from ab0t_auth.core import (
     Permission,
     AuthConfig,
 )
-from ab0t_auth.guard import AuthGuard
+from ab0t_auth.guard import AuthGuard, RevocationResult
 from ab0t_auth.errors import (
     AuthError,
     TokenExpiredError,
@@ -89,7 +89,7 @@ except ImportError:
     protected = _fastapi_not_installed
     permission_required = _fastapi_not_installed
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 __all__ = [
     # Core types
@@ -100,6 +100,7 @@ __all__ = [
     "AuthConfig",
     # Main guard
     "AuthGuard",
+    "RevocationResult",
     # FastAPI Dependencies
     "require_auth",
     "require_permission",

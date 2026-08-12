@@ -593,6 +593,15 @@ class AuthGuard:
     def invalidate_token(self, token: str) -> bool: ...
     def invalidate_user_permissions(self, user_id: str) -> int: ...
     def clear_caches(self) -> None: ...
+    # Opt-in revocation propagation: maps an auth revocation/mutation event to
+    # the invalidate_* methods above so a subscribed consumer drops stale cache
+    # entries the moment auth revokes something (removed user, rotated key,
+    # suspended org, dropped permission) instead of waiting for cache TTL.
+    # Additive and no-op unless called; malformed events are ignored, never
+    # raised. Dispatch on fields present: a `token` -> invalidate_token, a
+    # `user_id`/`sub` -> invalidate_user_permissions, a clear-all type or
+    # `all: true` -> clear_caches. Returns RevocationResult(handled=...).
+    def on_revocation_event(self, event: Mapping[str, Any]) -> RevocationResult: ...
 
     # Properties
     @property

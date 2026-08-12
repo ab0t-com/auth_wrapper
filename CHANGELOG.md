@@ -49,6 +49,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`AuthGuard.on_revocation_event(event)` — opt-in revocation propagation** (`guard.py`)
+  - New convenience method that maps an auth revocation/mutation event to the
+    existing `invalidate_token` / `invalidate_user_permissions` / `clear_caches`
+    methods, so a subscribed consumer can drop stale cache entries the moment
+    auth revokes something instead of waiting for cache TTL to lapse.
+  - Purely additive and opt-in: no network I/O, no new caching behaviour, and
+    no change to any existing call path. Consumers that never call it are
+    unaffected — TTL remains the backstop.
+  - Dispatches on the fields present in the event (recognised canonical types:
+    `permission.revoked`, `permission.granted`, `user.suspended`,
+    `apikey.revoked`, `org.changed`, `token.revoked`): a raw `token` field
+    invalidates the token cache, a `user_id`/`sub` field invalidates that
+    user's cached permissions, and a global-flush event clears all caches.
+  - Malformed/unrecognised events are ignored (never raised) so a bad event
+    cannot break a consumer's subscription loop; returns a new
+    `RevocationResult` summarising which caches were invalidated.
+  - Note: the token cache is keyed by token hash, so a `user_id`-only event
+    cannot drop that user's cached token entry (no raw token to hash); that
+    entry still expires by its short TTL.
+
 - **Permission fallback configuration** (`permission_fallback`)
   - New `AuthConfig` option controlling behavior when server-side permission checks fail
   - `"deny"` (default): Reject the request — fail-closed, recommended for production
