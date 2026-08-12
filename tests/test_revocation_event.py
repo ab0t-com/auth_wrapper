@@ -5,6 +5,11 @@ These verify the additive convenience mapper wires revocation events to the
 existing invalidate_* methods and is safe on malformed/unrecognised input.
 """
 
+import dataclasses
+from types import MappingProxyType
+
+import pytest
+
 from ab0t_auth.core import AuthenticatedUser, TokenClaims
 from ab0t_auth.guard import AuthGuard, RevocationResult
 
@@ -198,3 +203,115 @@ class TestOnRevocationEvent:
 
         assert result.event_type == "permission.revoked"
         assert result.permissions_invalidated == 1
+
+
+class TestOnRevocationEventContract:
+    """Contract / regression guards for the opt-in additive behaviour."""
+
+    def test_result_is_immutable(self):
+        result = RevocationResult(event_type="token.revoked", token_invalidated=True)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            result.token_invalidated = False  # type: ignore[misc]
+
+    def test_does_not_require_initialization_or_network(
+        self,
+        auth_guard: AuthGuard,
+        test_user: AuthenticatedUser,
+    ):
+        # A brand-new guard is not initialized and has no HTTP/JWKS client.
+        assert auth_guard.is_initialized is False
+        _prime_permissions(auth_guard, test_user.user_id, ("users:read",))
+
+        result = auth_guard.on_revocation_event(
+            {"type": "permission.revoked", "user_id": test_user.user_id}
+        )
+
+        # No network I/O was needed and state is untouched aside from caches.
+        assert result.permissions_invalidated == 1
+        assert auth_guard.is_initialized is False
+        assert auth_guard._http_client is None
+
+    def test_idempotent_second_call_is_safe(
+        self,
+        auth_guard: AuthGuard,
+        test_user: AuthenticatedUser,
+    ):
+        _prime_permissions(auth_guard, test_user.user_id, ("users:read",))
+        event = {"type": "permission.revoked", "user_id": test_user.user_id}
+
+        first = auth_guard.on_revocation_event(event)
+        second = auth_guard.on_revocation_event(event)
+
+        assert first.permissions_invalidated == 1
+        # Already gone — second call invalidates nothing but does not raise.
+        assert second.permissions_invalidated == 0
+        assert second.handled is False
+
+    def test_accepts_any_mapping_not_just_dict(
+        self,
+        auth_guard: AuthGuard,
+        test_user: AuthenticatedUser,
+    ):
+        _prime_permissions(auth_guard, test_user.user_id, ("users:read",))
+        event = MappingProxyType(
+            {"type": "permission.revoked", "user_id": test_user.user_id}
+        )
+
+        result = auth_guard.on_revocation_event(event)
+
+        assert result.permissions_invalidated == 1
+
+    @pytest.mark.parametrize("clear_type", ["caches.clear", "cache.clear", "auth.reset"])
+    def test_all_clear_all_aliases(
+        self,
+        auth_guard: AuthGuard,
+        test_user: AuthenticatedUser,
+        clear_type: str,
+    ):
+        _prime_permissions(auth_guard, test_user.user_id, ("users:read",))
+
+        result = auth_guard.on_revocation_event({"type": clear_type})
+
+        assert result.caches_cleared is True
+
+    def test_clear_all_takes_precedence_over_individual_fields(
+        self,
+        auth_guard: AuthGuard,
+        valid_token: str,
+        test_user: AuthenticatedUser,
+        test_claims: TokenClaims,
+    ):
+        _prime_token(auth_guard, valid_token, test_user, test_claims)
+        _prime_permissions(auth_guard, test_user.user_id, ("users:read",))
+
+        result = auth_guard.on_revocation_event(
+            {"type": "auth.reset", "token": valid_token, "user_id": test_user.user_id}
+        )
+
+        # Global flush wins; per-field counters stay at their defaults.
+        assert result.caches_cleared is True
+        assert result.token_invalidated is False
+        assert result.permissions_invalidated == 0
+        assert auth_guard._token_cache.get(valid_token) is None
+
+    def test_empty_string_fields_are_ignored(self, auth_guard: AuthGuard):
+        result = auth_guard.on_revocation_event(
+            {"type": "permission.revoked", "user_id": "", "token": ""}
+        )
+
+        assert result.handled is False
+
+    def test_existing_invalidate_methods_unchanged(
+        self,
+        auth_guard: AuthGuard,
+        valid_token: str,
+        test_user: AuthenticatedUser,
+        test_claims: TokenClaims,
+    ):
+        # The mapper must not change the behaviour of the primitives it calls.
+        _prime_token(auth_guard, valid_token, test_user, test_claims)
+        assert auth_guard.invalidate_token(valid_token) is True
+        assert auth_guard.invalidate_token(valid_token) is False
+
+        _prime_permissions(auth_guard, test_user.user_id, ("a", "b", "c"))
+        assert auth_guard.invalidate_user_permissions(test_user.user_id) == 3

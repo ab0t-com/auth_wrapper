@@ -377,6 +377,41 @@ print(auth.metrics.to_dict())
 # }
 ```
 
+### Revocation propagation (opt-in)
+
+Auth decisions are cached with a short TTL, so by default a revocation (a
+removed user, a rotated API key, a suspended org, a dropped permission) only
+takes effect once the relevant cache entry expires. If your service subscribes
+to the auth service's revocation event stream, `on_revocation_event` maps an
+event straight to the `invalidate_*` methods above so the revocation takes
+effect immediately instead of waiting for the TTL:
+
+```python
+# In your event-bus / webhook subscriber:
+async def handle_auth_event(event: dict) -> None:
+    result = auth.on_revocation_event(event)
+    if result.handled:
+        logger.info("auth cache invalidated", event=result.event_type)
+
+# Example events (the auth service owns the contract):
+#   {"type": "apikey.revoked",     "token": "<raw key>"}     -> drops that key
+#   {"type": "permission.revoked", "user_id": "user_123"}    -> drops user perms
+#   {"type": "user.suspended",     "user_id": "user_123"}    -> drops user perms
+#   {"type": "caches.clear"}                                 -> clears everything
+```
+
+`on_revocation_event` is **opt-in and additive**: it does no network I/O and
+adds no new caching behaviour. Services that never call it are unaffected — TTL
+remains the backstop. Malformed or unrecognised events are ignored (never
+raised) so a bad event cannot break your subscription loop; the returned
+`RevocationResult` reports what was invalidated.
+
+> **Note:** the token cache is keyed by a hash of the token, so an event that
+> only carries a `user_id` (e.g. `user.suspended`) invalidates that user's
+> cached *permissions* but cannot drop their cached *token* entry (there is no
+> raw token to hash). That entry still expires by its short TTL; for instant
+> suspension, also stop reading suspension state from a frozen JWT claim.
+
 ## Advanced Usage
 
 ### Optional Authentication
