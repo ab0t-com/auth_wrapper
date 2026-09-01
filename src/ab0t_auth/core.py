@@ -196,11 +196,30 @@ class AuthConfig:
 # =============================================================================
 # API Response Types
 # =============================================================================
+#
+# "No data evaporates": every response dataclass built from a server JSON dict
+# carries a ``raw`` field holding that complete, unmodified dict. The library
+# extracts the fields it models explicitly, but anything the auth service adds
+# that is not modeled here is preserved in ``raw`` rather than silently dropped
+# by the selective ``data.get(...)`` extraction. A caller can therefore read a
+# newly-added server field via ``response.raw["new_field"]`` before the library
+# is updated to model it.
+#
+# NOTE: ``raw`` does NOT rescue the *typed-interior* blind spot — a nested value
+# the service spec describes only as a bare {"type": "object"} still arrives as
+# an opaque dict with no per-field typing. That is inherent; ``raw`` at least
+# preserves the value so it is reachable.
 
 
 @dataclass(frozen=True, slots=True)
 class LoginResponse:
-    """Response from Ab0t login endpoint."""
+    """Response from Ab0t login endpoint.
+
+    ``raw`` holds the complete, unmodified server JSON dict this response was
+    built from. Any field the auth service returns that this dataclass does not
+    model explicitly is preserved there instead of being silently dropped, so a
+    caller can read a newly-added field before the library models it.
+    """
 
     access_token: str
     refresh_token: str | None = None
@@ -210,11 +229,17 @@ class LoginResponse:
     email: str | None = None
     org_id: str | None = None
     permissions: tuple[str, ...] = field(default_factory=tuple)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class TokenValidationResponse:
-    """Response from Ab0t token validation."""
+    """Response from Ab0t token validation.
+
+    ``raw`` preserves the full server JSON dict this response was built from
+    (empty when synthesized locally, e.g. on a 401). Unmodeled fields are kept
+    there rather than silently discarded.
+    """
 
     valid: bool
     user_id: str | None = None
@@ -223,22 +248,34 @@ class TokenValidationResponse:
     permissions: tuple[str, ...] = field(default_factory=tuple)
     expires_at: int | None = None
     error: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class PermissionCheckResponse:
-    """Response from Ab0t permission check."""
+    """Response from Ab0t permission check.
+
+    ``raw`` preserves the full server JSON dict this response was built from
+    (empty when synthesized locally, e.g. on a 403). Unmodeled fields are kept
+    there rather than silently discarded.
+    """
 
     allowed: bool
     permission: str
     user_id: str | None = None
     resource_id: str | None = None
     reason: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class ApiKeyValidationResponse:
-    """Response from Ab0t API key validation."""
+    """Response from Ab0t API key validation.
+
+    ``raw`` preserves the full server JSON dict this response was built from
+    (empty when synthesized locally, e.g. on a 401/403). Unmodeled fields are
+    kept there rather than silently discarded.
+    """
 
     valid: bool
     user_id: str | None = None
@@ -246,6 +283,7 @@ class ApiKeyValidationResponse:
     org_id: str | None = None
     permissions: tuple[str, ...] = field(default_factory=tuple)
     error: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +293,10 @@ class IntrospectionResponse:
     The 'active' field is the only REQUIRED field per RFC 7662.
     Defaults to False (fail-closed) — if the auth service omits it,
     the token is treated as inactive.
+
+    ``raw`` preserves the full server JSON dict this response was built from so
+    any field the auth service returns beyond the ones modeled here is kept
+    rather than silently discarded.
     """
 
     active: bool = False
@@ -272,6 +314,7 @@ class IntrospectionResponse:
     user_id: str | None = None
     org_id: str | None = None
     permissions: tuple[str, ...] = field(default_factory=tuple)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 # =============================================================================
