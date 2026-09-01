@@ -129,6 +129,7 @@ async def login(
             email=data.get("user", {}).get("email") or data.get("email"),
             org_id=data.get("org_id"),
             permissions=_parse_permissions(data),
+            raw=data,
         )
 
     except httpx.HTTPStatusError as e:
@@ -165,6 +166,7 @@ async def refresh_token(
             token_type=data.get("token_type", "Bearer"),
             expires_in=data.get("expires_in"),
             permissions=_parse_permissions(data),
+            raw=data,
         )
 
     except httpx.HTTPStatusError as e:
@@ -209,6 +211,7 @@ async def validate_token(
             org_id=data.get("org_id"),
             permissions=_parse_permissions(data),
             expires_at=data.get("expires_at"),
+            raw=data,
         )
 
     except httpx.HTTPStatusError as e:
@@ -251,6 +254,7 @@ async def validate_api_key(
             org_id=data.get("org_id"),
             permissions=_safe_permissions(data.get("permissions")),
             error=data.get("error"),
+            raw=data,
         )
 
     except httpx.HTTPStatusError as e:
@@ -330,6 +334,7 @@ async def check_permission(
             user_id=request.user_id,
             resource_id=request.resource_id,
             reason=data.get("reason"),
+            raw=data,
         )
 
     except httpx.HTTPStatusError as e:
@@ -486,6 +491,7 @@ async def introspect_token(
             user_id=data.get("user_id"),
             org_id=data.get("org_id"),
             permissions=_safe_permissions(data.get("permissions")),
+            raw=data,
         )
 
     except httpx.HTTPStatusError as e:
