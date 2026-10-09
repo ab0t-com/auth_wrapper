@@ -49,16 +49,16 @@
 
   What the Code Confirms
 
-  From permission_registry.py:113-168:
+  From the permission registry:
   - register_service_permissions() writes to DynamoDB with PK: PERM_SCHEMA#{service} — keyed by service name, not org
   - No org_id anywhere in the schema storage — this is by design, not an omission
 
-  From api/permissions.py:454-529:
+  From the permissions API:
   - Registration requires permissions.register permission (auth-gated)
   - API keys can be scoped to allowed_services via metadata — so a service can only update its own schema
   - But the resulting schema is globally visible — correct
 
-  From permission_service.py:115-184:
+  From the permission service:
   - get_user_permissions() joins global permissions + org membership permissions + role permissions + team permissions
   - Grants are stored at USER#{user_id} / ORG#{org_id} — fully org-scoped
   - The permission strings in grants reference the global vocabulary

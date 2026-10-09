@@ -14,8 +14,7 @@ from typing import Any, Generic, TypeVar
 
 from cachetools import TTLCache
 
-from ab0t_auth.core import AuthConfig, AuthenticatedUser, TokenClaims
-
+from ab0t_auth.core import AuthConfig, AuthenticatedUser, MeshToken, TokenClaims
 
 T = TypeVar("T")
 
@@ -77,16 +76,67 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()[:32]
 
 
-def create_permission_cache_key(user_id: str, permission: str, resource_id: str | None) -> str:
+def permission_credential_fingerprint(token: str | None, api_key: str | None = None) -> str | None:
+    """
+    Fingerprint of the credential a permission check is ASKED WITH (permission cache keying).
+
+    Priority matches client.check_permission (Authorization token first, then the API key). Only a SHA-256 prefix is
+    kept (hash_token) — the credential itself is never stored. None when there is no credential: such a result must
+    not be cached, because it cannot be attributed to a credential.
+    Pure function.
+    """
+    raw = (token or "").strip()
+    if raw[:7].lower() == "bearer ":
+        raw = raw[7:].strip()
+    if not raw:
+        raw = (api_key or "").strip()
+    return hash_token(raw) if raw else None
+
+
+def create_permission_cache_key(
+    user_id: str,
+    permission: str,
+    resource_id: str | None,
+    credential: str | None = None,
+    org_id: str | None = None,
+) -> str:
     """
     Create cache key for permission check.
 
+    Permission cache keying: a permission answer belongs to the CREDENTIAL that asked (an API key's own scope, a
+    delegation's scope, a login token's user) and to the ORG it was asked in — never to the user id alone. Keyed
+    `user_id:cred=<fp>:org=<org>:permission[:resource]` so an owner's (or a wide key's) `allowed` is never served to
+    the owner's narrow key, and a narrow key's `denied` never locks the owner out. The user id stays the PREFIX so
+    invalidate_user() still clears every credential of that user. A lookup WITHOUT a credential builds the legacy
+    `user_id:permission` key, which the library never writes any more — so a user-id-only reader always misses
+    (fails over to a real check) instead of reusing another credential's answer.
     Pure function.
     """
-    parts = [user_id, permission]
+    parts = [user_id]
+    if credential is not None:
+        parts.append(f"cred={credential}")
+        parts.append(f"org={org_id or ''}")
+    parts.append(permission)
     if resource_id:
         parts.append(resource_id)
     return ":".join(parts)
+
+
+def create_mesh_token_cache_key(
+    client_id: str, resource: str, scope: str, subject_token: str
+) -> str:
+    """Cache key for a token_for (P3) result.
+
+    Keyed by (client_id, resource, normalized scope, subject token). The subject
+    token enters ONLY as a SHA-256 digest (hash_token) — never stored verbatim —
+    so a new sign-in is a new key and one person's token is never handed to
+    another. Components are length-prefixed so distinct inputs cannot collide.
+    Pure function.
+    """
+    subj = hash_token(subject_token)
+    parts = (client_id, resource, scope, subj)
+    raw = "\x1e".join(f"{len(p)}:{p}" for p in parts)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def create_jwks_cache_key(auth_url: str, org_id: str | None) -> str:
@@ -126,9 +176,17 @@ class TokenCache:
         Get cached token entry.
 
         Returns None if not found or expired.
+
+        Security hardening: the TTLCache TTL is cache-wide, so an entry validated shortly before the
+        token's `exp` used to be served for the full TTL after the token expired. The per-entry `expires_at` (capped
+        at the token's `exp` in set()) is enforced here.
         """
         key = hash_token(token)
-        return self._cache.get(key)
+        entry = self._cache.get(key)
+        if entry is not None and entry.expires_at <= time.time():
+            self._cache.pop(key, None)
+            return None
+        return entry
 
     def set(
         self,
@@ -145,12 +203,16 @@ class TokenCache:
         key = hash_token(token)
         now = time.time()
         effective_ttl = ttl if ttl is not None else self.ttl
+        expires_at = now + effective_ttl
+        # Never cache a token past its own expiry.
+        if claims.exp is not None:
+            expires_at = min(expires_at, float(claims.exp))
 
         entry = TokenCacheEntry(
             user=user,
             claims=claims,
             created_at=now,
-            expires_at=now + effective_ttl,
+            expires_at=expires_at,
         )
         self._cache[key] = entry
 
@@ -201,9 +263,12 @@ class PermissionCache:
         user_id: str,
         permission: str,
         resource_id: str | None = None,
+        *,
+        credential: str | None = None,
+        org_id: str | None = None,
     ) -> bool | None:
-        """Get cached permission result."""
-        key = create_permission_cache_key(user_id, permission, resource_id)
+        """Get cached permission result for THIS credential in THIS org (see create_permission_cache_key)."""
+        key = create_permission_cache_key(user_id, permission, resource_id, credential, org_id)
         return self._cache.get(key)
 
     def set(
@@ -212,9 +277,12 @@ class PermissionCache:
         permission: str,
         allowed: bool,
         resource_id: str | None = None,
+        *,
+        credential: str | None = None,
+        org_id: str | None = None,
     ) -> None:
-        """Cache permission check result."""
-        key = create_permission_cache_key(user_id, permission, resource_id)
+        """Cache permission check result for THIS credential in THIS org."""
+        key = create_permission_cache_key(user_id, permission, resource_id, credential, org_id)
         self._cache[key] = allowed
 
     def invalidate_user(self, user_id: str) -> int:
@@ -308,6 +376,74 @@ class JWKSCache:
 
     def clear(self) -> None:
         """Clear all cached JWKS."""
+        self._cache.clear()
+
+    @property
+    def size(self) -> int:
+        """Current cache size."""
+        return len(self._cache)
+
+
+# =============================================================================
+# Mesh Token Cache (token_for / P3)
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class MeshTokenCacheEntry:
+    """A cached mesh token with the instant it stops being served."""
+
+    token: MeshToken
+    fresh_until: float
+
+
+@dataclass
+class MeshTokenCache:
+    """In-memory cache for token_for results, keyed by
+    create_mesh_token_cache_key.
+
+    A token is served until ``margin`` seconds before it expires, and never past
+    the person's own token expiry (``subject_exp`` passed to set). Tokens without
+    an expiry are not cached, and errors are never cached (set is only called on
+    success). Mirrors the Go SDK's TokenFor cache (minus single-flight, which is
+    a future nicety).
+    """
+
+    max_size: int = 1024
+    ttl: int = 900  # cache-wide ceiling; per-entry fresh_until is the real bound
+    margin: float = 30.0  # serve until this long before expiry (matches Go/browser SDK)
+    _cache: TTLCache[str, MeshTokenCacheEntry] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._cache = TTLCache(maxsize=self.max_size, ttl=self.ttl)
+
+    def get(self, key: str) -> MeshToken | None:
+        """Return the cached token for key, or None if absent/stale."""
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if time.time() >= entry.fresh_until:
+            self._cache.pop(key, None)
+            return None
+        return entry.token
+
+    def set(self, key: str, token: MeshToken, subject_exp: float | None = None) -> None:
+        """Cache a successful token.
+
+        No-op when the token has no expiry, or when it is already within
+        ``margin`` of expiry (or of the subject token's expiry).
+        """
+        if token.expires_at is None:
+            return
+        fresh_until = token.expires_at - self.margin
+        if subject_exp is not None:
+            fresh_until = min(fresh_until, subject_exp)
+        if time.time() >= fresh_until:
+            return
+        self._cache[key] = MeshTokenCacheEntry(token=token, fresh_until=fresh_until)
+
+    def clear(self) -> None:
+        """Clear all cached mesh tokens."""
         self._cache.clear()
 
     @property

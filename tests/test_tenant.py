@@ -4,30 +4,29 @@ Tests for ab0t_auth.tenant module.
 
 import pytest
 
-from ab0t_auth.core import AuthenticatedUser, AuthMethod, TokenType, TokenClaims
+from ab0t_auth.core import AuthenticatedUser, AuthMethod, TokenClaims, TokenType
 from ab0t_auth.tenant import (
-    TenantContext,
-    TenantConfig,
-    TenantExtractionStrategy,
-    Organization,
-    OrgRelationship,
-    TenantError,
-    TenantRequiredError,
-    TenantAccessDeniedError,
     OrgAccessDeniedError,
+    Organization,
     OrgNotFoundError,
-    extract_tenant_from_user,
-    extract_org_path_from_claims,
-    validate_tenant_access,
-    validate_org_access,
-    build_tenant_context,
-    validate_tenant_context,
-    check_tenant_permission,
-    check_org_permission,
-    build_tenant_scoped_permission,
+    OrgRelationship,
+    TenantAccessDeniedError,
+    TenantConfig,
+    TenantContext,
+    TenantError,
+    TenantExtractionStrategy,
+    TenantRequiredError,
     build_org_scoped_permission,
+    build_tenant_context,
+    build_tenant_scoped_permission,
+    check_org_permission,
+    check_tenant_permission,
+    extract_org_path_from_claims,
+    extract_tenant_from_user,
+    validate_org_access,
+    validate_tenant_access,
+    validate_tenant_context,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -206,7 +205,7 @@ class TestTenantConfig:
         config = TenantConfig()
 
         assert config.enforce_tenant_isolation is True
-        assert config.enforce_org_isolation is False
+        assert config.enforce_org_isolation is True  # SR-4 (0.1.2): fail-closed default
         assert config.allow_cross_tenant_admin is True
         assert config.cross_tenant_permission == "admin:cross_tenant"
         assert config.enable_org_hierarchy is True
@@ -398,15 +397,24 @@ class TestValidateOrgAccess:
         )
         assert allowed is True
 
-    def test_allow_any_org_when_isolation_disabled(self, test_user, default_config):
-        """Test allowing any org when isolation disabled."""
-        # default_config has enforce_org_isolation=False
+    def test_allow_any_org_when_isolation_disabled(self, test_user, relaxed_config):
+        """Test allowing any org when isolation is explicitly disabled."""
+        # relaxed_config sets enforce_org_isolation=False (opt-out; the default is True since 0.1.2, SR-4)
+        allowed, reason = validate_org_access(
+            user=test_user,
+            requested_org_id="any_org",
+            config=relaxed_config,
+        )
+        assert allowed is True
+
+    def test_default_config_denies_other_org(self, test_user, default_config):
+        """SR-4 (0.1.2): the DEFAULT config must not let a caller into an arbitrary other org."""
         allowed, reason = validate_org_access(
             user=test_user,
             requested_org_id="any_org",
             config=default_config,
         )
-        assert allowed is True
+        assert allowed is False
 
     def test_deny_other_org_when_strict(self, test_user, strict_config):
         """Test denying access to other org with strict config."""

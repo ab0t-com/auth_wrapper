@@ -122,7 +122,7 @@ class AuthSettings(BaseSettings):
         description="Verify token audience",
     )
     leeway_seconds: int = Field(
-        default=10,
+        default=5,  # (was 10): SDK 0.4.1 refreshes 30 s early; refuse a dead token locally
         ge=0,
         le=300,
         description="Clock skew leeway in seconds",

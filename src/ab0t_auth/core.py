@@ -176,7 +176,7 @@ class AuthConfig:
     token_cache_max_size: int = 1000
     verify_exp: bool = True
     verify_aud: bool = True
-    leeway_seconds: int = 10
+    leeway_seconds: int = 5  # (was 10): refuse a token >5 s past exp locally, never forward it
     header_name: str = "Authorization"
     header_prefix: str = "Bearer"
     api_key_header: str = "X-API-Key"
@@ -246,6 +246,32 @@ class ApiKeyValidationResponse:
     org_id: str | None = None
     permissions: tuple[str, ...] = field(default_factory=tuple)
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MeshToken:
+    """An access token for exactly ONE mesh resource, as returned by token_for.
+
+    Send it as ``Authorization: Bearer <access_token>`` to that resource only —
+    never forward a token received from one service on to another; get your own
+    with token_for. Mirrors the Go SDK's ``Token`` type.
+    """
+
+    access_token: str
+    token_type: str = "Bearer"
+    # The resource (RFC 8707) the token was requested for.
+    resource: str = ""
+    # The granted scope (space-delimited) when the server reported one, else the
+    # requested scope.
+    scope: str = ""
+    # When the token expires (epoch seconds, from expires_in). None when the
+    # server did not say; such a token is not cached.
+    expires_at: float | None = None
+
+    @property
+    def authorization_header(self) -> str:
+        """The value for an ``Authorization`` header: ``Bearer <access_token>``."""
+        return f"{self.token_type or 'Bearer'} {self.access_token}"
 
 
 @dataclass(frozen=True, slots=True)

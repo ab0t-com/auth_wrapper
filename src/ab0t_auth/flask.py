@@ -29,11 +29,14 @@ import functools
 from contextvars import ContextVar
 from typing import Any, Callable, Literal, ParamSpec, Sequence, TypeVar
 
-from flask import Flask, Request, Response, g, request, jsonify
+from flask import Flask, Request, Response, g, jsonify, request
 
+from ab0t_auth.cache import JWKSCache, PermissionCache, TokenCache, create_caches
+from ab0t_auth.client import create_http_client, validate_api_key
+from ab0t_auth.config import create_config
 from ab0t_auth.core import (
-    AuthCheckSync,
     AuthChecksSync,
+    AuthCheckSync,
     AuthConfig,
     AuthContext,
     AuthenticatedUser,
@@ -41,7 +44,6 @@ from ab0t_auth.core import (
     AuthResult,
     TokenType,
 )
-from ab0t_auth.config import create_config
 from ab0t_auth.errors import (
     AuthError,
     PermissionDeniedError,
@@ -53,16 +55,13 @@ from ab0t_auth.jwt import (
     parse_token_header,
     validate_token_pipeline,
 )
+from ab0t_auth.logging import AuthMetrics, get_logger
 from ab0t_auth.permissions import (
     check_all_permissions,
     check_any_permission,
     check_permission,
     check_permission_pattern,
 )
-from ab0t_auth.cache import TokenCache, PermissionCache, JWKSCache, create_caches
-from ab0t_auth.client import create_http_client, validate_api_key
-from ab0t_auth.logging import get_logger, AuthMetrics
-
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -208,14 +207,10 @@ class Ab0tAuth:
                 audience=self._audience or app.config.get("AB0T_AUTH_AUDIENCE"),
             )
         else:
-            raise ValueError(
-                "Must provide auth_url or set AB0T_AUTH_URL in app config"
-            )
+            raise ValueError("Must provide auth_url or set AB0T_AUTH_URL in app config")
 
         # Initialize components
-        self._token_cache, self._permission_cache, self._jwks_cache = create_caches(
-            self._config
-        )
+        self._token_cache, self._permission_cache, self._jwks_cache = create_caches(self._config)
 
         if self._config.enable_jwt_auth:
             self._jwk_client = create_jwk_client(self._config)
@@ -304,8 +299,7 @@ class Ab0tAuth:
             if pat.endswith("*"):
                 prefix = pat[:-1]
                 if normalized.startswith(prefix) and (
-                    len(normalized) == len(prefix)
-                    or normalized[len(prefix) :].startswith("/")
+                    len(normalized) == len(prefix) or normalized[len(prefix) :].startswith("/")
                 ):
                     return True
             else:
@@ -357,9 +351,7 @@ class Ab0tAuth:
             if not self._jwk_client:
                 return AuthResult.fail("JWT_DISABLED", "JWT auth not enabled")
 
-            user, claims = validate_token_pipeline(
-                token, self._jwk_client, self.config
-            )
+            user, claims = validate_token_pipeline(token, self._jwk_client, self.config)
 
             # Cache result
             if self._token_cache:
@@ -370,7 +362,9 @@ class Ab0tAuth:
         except AuthError as e:
             return AuthResult.fail(e.code, e.message)
         except Exception as e:
-            return AuthResult.fail("VALIDATION_ERROR", str(e))
+            # the raw exception text is logged, never returned to the caller.
+            self._logger.warning("Token validation error", error=str(e))
+            return AuthResult.fail("VALIDATION_ERROR", "Token validation failed")
 
     def _authenticate_api_key(self, api_key: str) -> AuthResult:
         """Authenticate using API key (sync wrapper)."""
@@ -379,9 +373,7 @@ class Ab0tAuth:
             loop = asyncio.new_event_loop()
             try:
                 client = create_http_client()
-                response = loop.run_until_complete(
-                    validate_api_key(client, self.config, api_key)
-                )
+                response = loop.run_until_complete(validate_api_key(client, self.config, api_key))
                 loop.run_until_complete(client.aclose())
             finally:
                 loop.close()
@@ -405,8 +397,12 @@ class Ab0tAuth:
             )
             return AuthResult.ok(user)
 
+        except AuthError as e:
+            return AuthResult.fail(e.code, e.message)
         except Exception as e:
-            return AuthResult.fail("API_KEY_ERROR", str(e))
+            # the raw exception text is logged, never returned to the caller.
+            self._logger.warning("API key validation error", error=str(e))
+            return AuthResult.fail("API_KEY_ERROR", "API key validation failed")
 
     # =========================================================================
     # Authorization
@@ -603,6 +599,7 @@ def login_required(
         def tenant_data(tenant_id):
             return {"tenant": tenant_id}
     """
+
     def decorator(func: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(func)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -617,6 +614,7 @@ def login_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return func(*args, **kwargs)
+
         return decorated  # type: ignore
 
     # Support both @login_required and @login_required()
@@ -651,6 +649,7 @@ def permission_required(
         def admin():
             return {"admin": True}
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -670,7 +669,9 @@ def permission_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 
@@ -706,6 +707,7 @@ def permissions_required(
         def any_admin():
             return {"admin": True}
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -729,7 +731,9 @@ def permissions_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 
@@ -759,6 +763,7 @@ def role_required(
         def admin():
             return {"admin": True}
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -776,7 +781,9 @@ def role_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 
@@ -806,6 +813,7 @@ def permission_pattern_required(
         def admin_anything():
             return {"pattern": "matched"}
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -825,7 +833,9 @@ def permission_pattern_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 
@@ -846,12 +856,15 @@ def init_blueprint_auth(auth: Ab0tAuth) -> Callable[[Callable[P, T]], Callable[P
         def authenticate():
             pass  # Authentication handled by decorator
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
             auth._authenticate_request()
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 

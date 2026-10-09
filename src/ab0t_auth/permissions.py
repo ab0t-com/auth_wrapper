@@ -12,16 +12,16 @@ from typing import Callable
 
 import httpx
 
-from ab0t_auth.cache import PermissionCache
+from ab0t_auth.cache import PermissionCache, permission_credential_fingerprint
 from ab0t_auth.client import check_permission as check_permission_remote
 from ab0t_auth.core import (
     AuthConfig,
     AuthenticatedUser,
+    AuthMethod,
     PermissionCheckRequest,
     PermissionResult,
 )
 from ab0t_auth.errors import AuthServiceError, PermissionDeniedError
-
 
 # =============================================================================
 # Client-Side Permission Checks (Pure Functions)
@@ -155,10 +155,7 @@ def filter_permissions(
 
     Pure function - returns immutable tuple.
     """
-    return tuple(
-        perm for perm in user.permissions
-        if fnmatch.fnmatch(perm, pattern)
-    )
+    return tuple(perm for perm in user.permissions if fnmatch.fnmatch(perm, pattern))
 
 
 def get_permission_categories(user: AuthenticatedUser) -> tuple[str, ...]:
@@ -203,9 +200,27 @@ async def verify_permission(
     - If token is provided, uses Authorization: Bearer header with token
     - If api_key is provided (and no token), sends API key as Bearer token
     """
+    # Security hardening: ask with the credential that AUTHENTICATED this user. The guard tries the
+    # bearer first and falls through to X-API-Key when the bearer is rejected locally (wrong audience, other service);
+    # sending that rejected bearer would let auth answer for a different caller than the one authenticated here (a
+    # narrow key + any login token the service rejects = the key owner's full authority).
+    if user.auth_method == AuthMethod.API_KEY:
+        token = ""
+    elif user.auth_method == AuthMethod.JWT:
+        api_key = None
+
+    # Permission cache keying: the cached answer belongs to the CREDENTIAL that asked, in the ORG it asked in — never to
+    # the user id alone (an owner's / wide key's allow must not authorise the owner's narrow key; a narrow key's deny
+    # must not lock the owner out). No credential → never read or write the cache.
+    credential = permission_credential_fingerprint(token, api_key)
+    org_id = user.org_id or config.org_id
+    use_cache = cache is not None and credential is not None
+
     # Check cache first
-    if cache:
-        cached = cache.get(user.user_id, permission, resource_id)
+    if use_cache:
+        cached = cache.get(
+            user.user_id, permission, resource_id, credential=credential, org_id=org_id
+        )
         if cached is not None:
             if cached:
                 return PermissionResult.grant(permission)
@@ -214,7 +229,7 @@ async def verify_permission(
     request = PermissionCheckRequest(
         user_id=user.user_id,
         permission=permission,
-        org_id=user.org_id or config.org_id,
+        org_id=org_id,
         resource_id=resource_id,
         resource_type=resource_type,
     )
@@ -223,8 +238,15 @@ async def verify_permission(
         response = await check_permission_remote(client, config, token, request, api_key=api_key)
 
         # Update cache
-        if cache:
-            cache.set(user.user_id, permission, response.allowed, resource_id)
+        if use_cache:
+            cache.set(
+                user.user_id,
+                permission,
+                response.allowed,
+                resource_id,
+                credential=credential,
+                org_id=org_id,
+            )
 
         if response.allowed:
             return PermissionResult.grant(permission)
@@ -236,6 +258,7 @@ async def verify_permission(
         #   "deny"   — reject the request (fail-closed, default)
         #   "client" — fall back to JWT claims (fail-open, maintains availability)
         import structlog
+
         logger = structlog.get_logger("ab0t_auth")
         logger.warning(
             "Server-side permission check failed, using fallback",
@@ -268,7 +291,11 @@ async def verify_any_permission(
     """
     for perm in permissions:
         result = await verify_permission(
-            client, config, token, user, perm,
+            client,
+            config,
+            token,
+            user,
+            perm,
             resource_id=resource_id,
             cache=cache,
             api_key=api_key,
@@ -299,7 +326,11 @@ async def verify_all_permissions(
     """
     for perm in permissions:
         result = await verify_permission(
-            client, config, token, user, perm,
+            client,
+            config,
+            token,
+            user,
+            perm,
             resource_id=resource_id,
             cache=cache,
             api_key=api_key,
@@ -371,8 +402,10 @@ def has_permission(permission: str) -> Callable[[AuthenticatedUser], bool]:
 
     Higher-order function - returns reusable predicate.
     """
+
     def predicate(user: AuthenticatedUser) -> bool:
         return permission in user.permissions
+
     return predicate
 
 
@@ -382,8 +415,10 @@ def has_any_permission(*permissions: str) -> Callable[[AuthenticatedUser], bool]
 
     Higher-order function.
     """
+
     def predicate(user: AuthenticatedUser) -> bool:
         return any(p in user.permissions for p in permissions)
+
     return predicate
 
 
@@ -393,8 +428,10 @@ def has_all_permissions(*permissions: str) -> Callable[[AuthenticatedUser], bool
 
     Higher-order function.
     """
+
     def predicate(user: AuthenticatedUser) -> bool:
         return all(p in user.permissions for p in permissions)
+
     return predicate
 
 
@@ -404,8 +441,10 @@ def has_permission_pattern(pattern: str) -> Callable[[AuthenticatedUser], bool]:
 
     Higher-order function.
     """
+
     def predicate(user: AuthenticatedUser) -> bool:
         return any(fnmatch.fnmatch(p, pattern) for p in user.permissions)
+
     return predicate
 
 
@@ -415,6 +454,8 @@ def has_role(role: str) -> Callable[[AuthenticatedUser], bool]:
 
     Higher-order function.
     """
+
     def predicate(user: AuthenticatedUser) -> bool:
         return role in user.roles
+
     return predicate

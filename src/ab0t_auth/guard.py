@@ -22,9 +22,15 @@ from ab0t_auth.cache import (
 from ab0t_auth.client import (
     create_http_client,
     validate_api_key,
-    validate_token as validate_token_remote,
 )
-from ab0t_auth.config import AuthSettings, BypassConfig, create_config, load_bypass_config, settings_to_config
+from ab0t_auth.client import validate_token as validate_token_remote
+from ab0t_auth.config import (
+    AuthSettings,
+    BypassConfig,
+    create_config,
+    load_bypass_config,
+    settings_to_config,
+)
 from ab0t_auth.core import (
     AuthConfig,
     AuthContext,
@@ -130,9 +136,7 @@ class AuthGuard:
         self._jwk_client: PyJWKClient | None = None
 
         # Initialize caches
-        self._token_cache, self._permission_cache, self._jwks_cache = create_caches(
-            self._config
-        )
+        self._token_cache, self._permission_cache, self._jwks_cache = create_caches(self._config)
 
         # Load bypass configuration (for testing/development)
         self._bypass_config = load_bypass_config()
@@ -188,6 +192,17 @@ class AuthGuard:
             jwt_enabled=self._config.enable_jwt_auth,
             api_key_enabled=self._config.enable_api_key_auth,
         )
+        # Security hardening: with no audience (or verify_aud off) a JWT minted for ANY other mesh
+        # service is accepted here. Not changed to a hard failure (would break existing deployments) — made loud.
+        if self._config.enable_jwt_auth and (
+            not self._config.audience or not self._config.verify_aud
+        ):
+            self._logger.warning(
+                "JWT audience is NOT verified: tokens issued for other services are accepted. "
+                "Set AB0T_AUTH_AUDIENCE (and keep AB0T_AUTH_VERIFY_AUD=true) in production.",
+                audience=self._config.audience,
+                verify_aud=self._config.verify_aud,
+            )
 
     async def shutdown(self) -> None:
         """
@@ -421,7 +436,9 @@ class AuthGuard:
                 method="jwt",
                 error=str(e),
             )
-            return AuthResult.fail("VALIDATION_ERROR", str(e))
+            return AuthResult.fail(
+                "VALIDATION_ERROR", "Token validation failed"
+            )  # detail logged above
 
     async def _authenticate_api_key(self, api_key: str) -> AuthResult:
         """
@@ -465,7 +482,9 @@ class AuthGuard:
         except AuthError as e:
             return AuthResult.fail(e.code, e.message)
         except Exception as e:
-            return AuthResult.fail("API_KEY_ERROR", str(e))
+            # the raw exception text is logged, never returned to the caller.
+            self._logger.warning("API key validation error", error=str(e))
+            return AuthResult.fail("API_KEY_ERROR", "API key validation failed")
 
     # =========================================================================
     # Authorization Methods
@@ -548,7 +567,4 @@ class AuthGuard:
         )
 
     def __repr__(self) -> str:
-        return (
-            f"AuthGuard(auth_url={self._config.auth_url!r}, "
-            f"initialized={self._initialized})"
-        )
+        return f"AuthGuard(auth_url={self._config.auth_url!r}, " f"initialized={self._initialized})"

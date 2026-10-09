@@ -22,7 +22,6 @@ from ab0t_auth.core import (
 )
 from ab0t_auth.errors import AuthServiceError, map_http_error
 
-
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -59,6 +58,21 @@ def _parse_permissions(data: dict[str, Any]) -> tuple[str, ...]:
     if "scope" in data:
         return _safe_permissions(data["scope"])
     return ()
+
+
+def _http_error_message(e: httpx.HTTPStatusError) -> str:
+    """Client-safe message for an auth-service HTTP error.
+
+    Security hardening: str(HTTPStatusError) contains the internal auth URL
+    ("... for url 'http://auth:8001/auth/validate-api-key'"), and that text reached the 401/403 body a
+    caller sees (guard → AuthResult → TokenInvalidError). Only the status code is exposed.
+    """
+    return f"Auth service returned HTTP {e.response.status_code}"
+
+
+def _is_true(value: Any) -> bool:
+    """Strict boolean read of an auth-service decision field: only JSON `true` allows."""
+    return value is True
 
 
 # =============================================================================
@@ -132,7 +146,7 @@ async def login(
         )
 
     except httpx.HTTPStatusError as e:
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to connect to auth service",
@@ -168,7 +182,7 @@ async def refresh_token(
         )
 
     except httpx.HTTPStatusError as e:
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to refresh token",
@@ -203,7 +217,7 @@ async def validate_token(
         data = response.json()
 
         return TokenValidationResponse(
-            valid=data.get("valid", False),
+            valid=_is_true(data.get("valid")),
             user_id=data.get("user_id"),
             email=data.get("email"),
             org_id=data.get("org_id"),
@@ -217,7 +231,7 @@ async def validate_token(
                 valid=False,
                 error="Token is invalid or expired",
             )
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to validate token",
@@ -245,7 +259,7 @@ async def validate_api_key(
         data = response.json()
 
         return ApiKeyValidationResponse(
-            valid=data.get("valid", False),
+            valid=_is_true(data.get("valid")),
             user_id=data.get("user_id"),
             email=data.get("email"),
             org_id=data.get("org_id"),
@@ -259,7 +273,7 @@ async def validate_api_key(
                 valid=False,
                 error="Invalid API key",
             )
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to validate API key",
@@ -325,7 +339,7 @@ async def check_permission(
         data = response.json()
 
         return PermissionCheckResponse(
-            allowed=data.get("allowed", False),
+            allowed=_is_true(data.get("allowed")),
             permission=request.permission,
             user_id=request.user_id,
             resource_id=request.resource_id,
@@ -340,7 +354,7 @@ async def check_permission(
                 user_id=request.user_id,
                 reason="Permission denied",
             )
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to check permission",
@@ -373,7 +387,7 @@ async def get_user_permissions(
         return _safe_permissions(data.get("permissions"))
 
     except httpx.HTTPStatusError as e:
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to get user permissions",
@@ -407,7 +421,7 @@ async def fetch_jwks(
         return response.json()
 
     except httpx.HTTPStatusError as e:
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to fetch JWKS",
@@ -433,7 +447,7 @@ async def fetch_openid_configuration(
         return response.json()
 
     except httpx.HTTPStatusError as e:
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to fetch OpenID configuration",
@@ -472,7 +486,7 @@ async def introspect_token(
         data = response.json()
 
         return IntrospectionResponse(
-            active=data.get("active", False),
+            active=_is_true(data.get("active")),
             scope=data.get("scope"),
             client_id=data.get("client_id"),
             username=data.get("username"),
@@ -489,7 +503,7 @@ async def introspect_token(
         )
 
     except httpx.HTTPStatusError as e:
-        raise map_http_error(e.response.status_code, str(e)) from e
+        raise map_http_error(e.response.status_code, _http_error_message(e)) from e
     except httpx.RequestError as e:
         raise AuthServiceError(
             "Failed to introspect token",

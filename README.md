@@ -360,6 +360,86 @@ Tenant (Company)
 
 ---
 
+## Calling Another Mesh Service for a Signed-In Person — `token_for`
+
+When your app needs to call **another** service on behalf of a signed-in person, mint a token for that one service
+with `token_for`. It performs an OAuth 2.0 Token Exchange (RFC 8693): the person's token is the `subject_token`, your
+app proves who it is with its own OAuth client credentials, exactly one `resource` (RFC 8707) is requested, and no
+`actor_token` is sent — the authenticated client is the actor.
+
+```python
+import httpx
+from ab0t_auth import token_for, MeshTokenCache
+from ab0t_auth.config import create_config
+
+config = create_config("https://auth.service.ab0t.com")
+cache = MeshTokenCache()  # optional; reuse tokens until shortly before they expire
+
+async with httpx.AsyncClient() as client:
+    tok = await token_for(
+        client, config,
+        "https://documents.service.example",   # the resource (send the token ONLY here)
+        "documents.read",                       # requested scope (space-delimited)
+        person_token,                           # the signed-in person's access token
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        cache=cache,
+    )
+
+# call the resource with the minted token
+resp = await client.get(
+    "https://documents.service.example/v1/docs",
+    headers={"Authorization": tok.authorization_header},
+)
+```
+
+`MeshToken` carries `access_token`, `token_type`, `resource`, `scope` (granted) and `expires_at`.
+
+- **One resource per token.** Send it only to the resource it was requested for. Never forward a token you received
+  to another service — get your own with `token_for`.
+- **Cached** (pass a `MeshTokenCache`): served from memory until 30 s before it expires, and never past the person's
+  own token expiry; keyed by the client, the resource, the sorted scope set and a hash of the person's token — a new
+  sign-in is a new key. Errors are never cached.
+- **No refresh tokens.** Renewing is simply calling again.
+- **Only your client credentials reach the token endpoint** — HTTP Basic by default, or pass `client_auth="post"` for
+  `client_secret_post`. A configured service API key is never sent here.
+
+### What the answers mean
+
+`token_for` classifies failures from the HTTP status and the OAuth `error` / `suberror` members only (never the
+free-text description) onto typed exceptions:
+
+| Wire | Raised | You do |
+|---|---|---|
+| 400 `invalid_request` or `invalid_grant` | `ReauthenticateRequired` | the person's token was not accepted — sign them in again and retry once |
+| 400 `invalid_target` + `suberror: consent_required` | `ConsentRequiredError` | send the person through `err.authorization_url(redirect_uri, state=..., code_challenge=...)` once (use `new_pkce()`), then retry |
+| 400 `invalid_target` | `NoConnectionError` | an org admin must approve the connection |
+| 400 `invalid_scope` | `ScopeNotAllowedError` | ask for less, or have the ceiling widened |
+| 401/400 `invalid_client` | `ClientAuthError` | fix or rotate the secret |
+| 400 `unauthorized_client` | `ClientNotEnabledError` | register the token-exchange grant type |
+| 5xx / 429 / network | `AuthServiceError` | back off and retry; never fall back to an expired token |
+
+```python
+from ab0t_auth import (
+    token_for, new_pkce,
+    ReauthenticateRequired, ConsentRequiredError, NoConnectionError,
+    ScopeNotAllowedError, ClientAuthError, AuthServiceError,
+)
+
+try:
+    tok = await token_for(client, config, resource, scope, person_token,
+                          client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
+except ConsentRequiredError as e:
+    verifier, challenge = new_pkce()   # keep `verifier` for the code exchange
+    redirect_the_person_to(e.authorization_url("https://app.example/cb", state="...", code_challenge=challenge))
+except ReauthenticateRequired:
+    sign_the_person_in_again()
+except AuthServiceError:
+    back_off_and_retry_later()
+```
+
+---
+
 ## FAQ
 
 ### "Why not just use FastAPI's built-in security?"

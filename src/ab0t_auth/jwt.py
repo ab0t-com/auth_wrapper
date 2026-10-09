@@ -23,7 +23,6 @@ from ab0t_auth.errors import (
     map_jwt_error,
 )
 
-
 # =============================================================================
 # Token Parsing Functions (Pure)
 # =============================================================================
@@ -115,7 +114,9 @@ def claims_to_token_claims(payload: dict[str, Any]) -> TokenClaims:
     )
 
 
-def token_claims_to_user(claims: TokenClaims, auth_method: AuthMethod = AuthMethod.JWT) -> AuthenticatedUser:
+def token_claims_to_user(
+    claims: TokenClaims, auth_method: AuthMethod = AuthMethod.JWT
+) -> AuthenticatedUser:
     """
     Convert TokenClaims to AuthenticatedUser.
 
@@ -177,14 +178,56 @@ def build_jwks_url(config: AuthConfig) -> str:
     return f"{config.auth_url}/.well-known/jwks.json"
 
 
+JWKS_UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS = 30.0
+
+
+class CooldownPyJWKClient(PyJWKClient):
+    """
+    PyJWKClient that refreshes the JWKS for an UNKNOWN `kid` at most once per cooldown window.
+
+    Security hardening: PyJWT 2.8 / 2.11 (this package allows >=2.8) refetch the
+    JWK set on EVERY token whose `kid` is not in the cached set. The fetch is synchronous (urllib) and runs on the
+    event loop, so an unauthenticated caller sending random-`kid` tokens made the service fetch JWKS once per request
+    (30 s default timeout). Key rotation still works: the first unknown kid after the window triggers one refresh.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        refresh_cooldown: float = JWKS_UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._ab0t_refresh_cooldown = refresh_cooldown
+        self._ab0t_last_forced_refresh: float | None = None
+
+    def get_signing_key(self, kid: str) -> Any:
+        signing_key = self.match_kid(self.get_signing_keys(), kid)
+        if signing_key:
+            return signing_key
+
+        now = time.monotonic()
+        last = self._ab0t_last_forced_refresh
+        if last is not None and now - last < self._ab0t_refresh_cooldown:
+            raise PyJWKClientError("Unable to find a signing key that matches the token")
+        self._ab0t_last_forced_refresh = now
+
+        signing_key = self.match_kid(self.get_signing_keys(refresh=True), kid)
+        if not signing_key:
+            raise PyJWKClientError("Unable to find a signing key that matches the token")
+        return signing_key
+
+
 def create_jwk_client(config: AuthConfig) -> PyJWKClient:
     """
     Create PyJWKClient for JWKS-based validation.
 
-    Factory function - creates configured client.
+    Factory function with an unknown-kid refresh cooldown. The fetch timeout stays PyJWT's default (30 s): a 10 s
+    bound refused a legitimate login on a loaded stack (JWKS answered in > 10 s), so the timeout
+    is left at the default; the cooldown alone bounds the fetch rate.
     """
     jwks_url = build_jwks_url(config)
-    return PyJWKClient(
+    return CooldownPyJWKClient(
         jwks_url,
         cache_jwk_set=True,
         lifespan=config.jwks_cache_ttl,

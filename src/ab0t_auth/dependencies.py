@@ -34,7 +34,6 @@ from ab0t_auth.permissions import (
     verify_permission,
 )
 
-
 # =============================================================================
 # Type Aliases for FastAPI
 # =============================================================================
@@ -497,9 +496,7 @@ def optional_auth(
 
         # Run checks if provided; return None on failure (don't raise)
         try:
-            await _run_auth_checks(
-                user, request, check, checks, check_mode, "Check failed"
-            )
+            await _run_auth_checks(user, request, check, checks, check_mode, "Check failed")
         except PermissionDeniedError:
             return None
 
@@ -563,8 +560,9 @@ def get_auth_context(
                 "timestamp": ctx.timestamp.isoformat(),
             }
     """
-    from ab0t_auth.core import AuthContext
     import uuid
+
+    from ab0t_auth.core import AuthContext
 
     async def dependency(
         request: Request,
@@ -822,8 +820,20 @@ def require_auth_and_permission(
                 required_permission="org:member",
             )
 
-        # Check permission
-        result = check_permission(user, permission)
+        # Check permission — honour permission_check_mode like require_permission
+        # (this path previously always used token claims, so a revoked permission kept passing in server mode).
+        if guard._config.permission_check_mode == "server":
+            result = await verify_permission(
+                guard._http_client,
+                guard._config,
+                authorization or "",
+                user,
+                permission,
+                cache=guard._permission_cache,
+                api_key=api_key,
+            )
+        else:
+            result = check_permission(user, permission)
         if not result.allowed:
             raise PermissionDeniedError(
                 result.reason or f"Permission '{permission}' required",

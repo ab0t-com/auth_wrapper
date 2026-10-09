@@ -221,6 +221,200 @@ class RateLimitError(AuthError):
 
 
 # =============================================================================
+# Mesh token-exchange errors (token_for / P3)
+# =============================================================================
+#
+# These are the typed outcomes of token_for — the P3 OAuth 2.0 Token Exchange
+# (RFC 8693) that mints a token to act for a signed-in person at another mesh
+# service. They are the Python twins of the Go SDK's TokenFor sentinels
+# (ErrReauthenticate, ErrNoConnection / *ConsentRequired, ErrScopeNotAllowed,
+# ErrClientAuth, ErrClientNotEnabled). "Unavailable" reuses AuthServiceError —
+# the library's existing 503 class — so a dependency failure classifies the same
+# way everywhere.
+#
+# Classification uses ONLY the HTTP status and the OAuth `error` / `suberror`
+# members — never the free-text `error_description`. Messages carried on these
+# exceptions are STATIC; the wire details (code, status, request id) live in
+# `.details` for the caller's own logs, never a human-typed reason string.
+
+
+class MeshTokenError(AuthError):
+    """Base for a token_for (P3 token-exchange) failure.
+
+    Carries the wire classification facts (never the free-text description) for
+    the caller's own logging.
+    """
+
+    error_code = "MESH_TOKEN_ERROR"
+    status_code = 400
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        wire_error: str | None = None,
+        status: int | None = None,
+        resource: str | None = None,
+        scope: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        details: dict[str, Any] = {}
+        if wire_error:
+            details["wire_error"] = wire_error
+        if status is not None:
+            details["status"] = status
+        if resource is not None:
+            details["resource"] = resource
+        if scope is not None:
+            details["scope"] = scope
+        if request_id:
+            details["request_id"] = request_id
+        super().__init__(message, details=details if details else None)
+        self.wire_error = wire_error
+        self.status = status
+        self.resource = resource
+        self.scope = scope
+        self.request_id = request_id
+
+
+class ReauthenticateRequired(MeshTokenError):
+    """The person's token was not accepted — expired, revoked, not issued for
+    your app, or not acceptable by policy (e.g. they left the organisation).
+
+    Wire: 400 invalid_request or invalid_grant. Get a fresh session (sign the
+    person in again) and retry once.
+    """
+
+    error_code = "REAUTHENTICATE_REQUIRED"
+    status_code = 401
+
+    def __init__(
+        self, message: str = "The person's session was not accepted", **kwargs: Any
+    ) -> None:
+        super().__init__(message, **kwargs)
+
+
+class NoConnectionError(MeshTokenError):
+    """There is no usable connection from your app to that resource, or the
+    resource is unknown / malformed.
+
+    Wire: 400 invalid_target (no suberror). An org admin must approve the
+    connection; the person cannot fix it.
+    """
+
+    error_code = "NO_CONNECTION"
+    status_code = 403
+
+    def __init__(
+        self, message: str = "No usable connection to that resource", **kwargs: Any
+    ) -> None:
+        super().__init__(message, **kwargs)
+
+
+class ConsentRequiredError(MeshTokenError):
+    """The person can approve the connection themselves but has not yet done so.
+
+    Wire: 400 invalid_target with ``"suberror": "consent_required"``. Send the
+    person through ``authorization_url(...)`` once (a normal authorization
+    request with prompt=consent), then call token_for again.
+
+    Deliberately NOT a subclass of NoConnectionError — consent is a different
+    outcome (the person can fix it), mirroring the Go SDK where errors.Is for
+    ErrNoConnection is false on a consent case.
+    """
+
+    error_code = "CONSENT_REQUIRED"
+    status_code = 403
+
+    def __init__(
+        self,
+        message: str = "The person must approve access to that resource",
+        *,
+        client_id: str | None = None,
+        authorization_endpoint: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(message, **kwargs)
+        self.client_id = client_id
+        self.authorization_endpoint = authorization_endpoint
+
+    def authorization_url(
+        self,
+        redirect_uri: str,
+        *,
+        state: str = "",
+        code_challenge: str = "",
+    ) -> str:
+        """Build the authorization request that asks the person to approve:
+        response_type=code, your client_id, redirect_uri, the scope, the resource
+        (RFC 8707), state, a PKCE S256 code_challenge (RFC 7636) and
+        prompt=consent. Create the verifier/challenge with ``new_pkce`` and keep
+        the verifier for the code exchange at your redirect URI.
+        """
+        from urllib.parse import urlencode
+
+        endpoint = self.authorization_endpoint or ""
+        params: dict[str, str] = {"response_type": "code"}
+        if self.client_id:
+            params["client_id"] = self.client_id
+        params["redirect_uri"] = redirect_uri
+        if self.scope:
+            params["scope"] = self.scope
+        if self.resource:
+            params["resource"] = self.resource
+        if state:
+            params["state"] = state
+        if code_challenge:
+            params["code_challenge"] = code_challenge
+            params["code_challenge_method"] = "S256"
+        params["prompt"] = "consent"
+        sep = "&" if "?" in endpoint else "?"
+        return f"{endpoint}{sep}{urlencode(params)}"
+
+
+class ScopeNotAllowedError(MeshTokenError):
+    """The requested scope exceeds what your app / the connection / the person
+    allows.
+
+    Wire: 400 invalid_scope. Ask for less, or have the ceiling widened.
+    """
+
+    error_code = "SCOPE_NOT_ALLOWED"
+    status_code = 403
+
+    def __init__(self, message: str = "Requested scope is not allowed", **kwargs: Any) -> None:
+        super().__init__(message, **kwargs)
+
+
+class ClientAuthError(MeshTokenError):
+    """Your app's OAuth client credentials were rejected.
+
+    Wire: 401 (or 400) invalid_client. Fix or rotate the secret.
+    """
+
+    error_code = "CLIENT_AUTH_FAILED"
+    status_code = 401
+
+    def __init__(self, message: str = "Client authentication failed", **kwargs: Any) -> None:
+        super().__init__(message, **kwargs)
+
+
+class ClientNotEnabledError(MeshTokenError):
+    """Your app is not registered for the grant type this call needs.
+
+    Wire: 400 unauthorized_client. Register the token-exchange grant type.
+    """
+
+    error_code = "CLIENT_NOT_ENABLED"
+    status_code = 403
+
+    def __init__(
+        self, message: str = "Client is not enabled for this grant type", **kwargs: Any
+    ) -> None:
+        super().__init__(message, **kwargs)
+
+
+# =============================================================================
 # Error Mapping Functions (Pure)
 # =============================================================================
 

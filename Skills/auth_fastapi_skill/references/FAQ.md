@@ -848,7 +848,7 @@ curl -X PUT "$AUTH_URL/api-keys/$KEY_ID" \
   -d '{"permissions": ["resource.read", "resource.create.allocations", "resource.new_permission"]}'
 ```
 
-This was a real production bug — see ticket 20260205 for the full postmortem.
+This was a real production bug.
 <!-- /FAQ -->
 
 ### Q: Admin of Org A can see Org B's resources — how?
