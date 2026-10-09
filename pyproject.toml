@@ -75,9 +75,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ab0t/ab0t-auth"
+Homepage = "github.com/ab0t-com/auth-sdk-go"
 Documentation = "https://docs.ab0t.com/auth-wrapper"
-Repository = "https://github.com/ab0t/ab0t-auth"
+Repository = "github.com/ab0t-com/auth-sdk-go"
 
 [tool.hatch.build.targets.sdist]
 include = [
