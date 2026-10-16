@@ -498,7 +498,8 @@ result = await verify_permission(client, config, token, user, "sensitive:action"
 **Server mode is recommended** for services using `auth.service.ab0t.com`.
 
 The Ab0t auth service intentionally stores permissions in the database (not in JWT tokens) to support:
-- **Instant revocation** - Permissions removed immediately, no waiting for token expiry
+- **Fast revocation** - Permissions removed server-side take effect within the permission cache window
+  (15 s by default, see [Caching and revocation latency](#caching-and-revocation-latency)), no waiting for token expiry
 - **Dynamic org scoping** - Permissions vary by organization context
 - **Role-based inheritance** - Roles expand to permissions at check time
 
@@ -518,7 +519,54 @@ auth = AuthGuard(
 | Mode | Speed | Use Case |
 |------|-------|----------|
 | `client` (default) | Instant | Offline validation, cached permissions in JWT |
-| `server` | ~5-10ms | Real-time permissions, instant revocation support |
+| `server` | ~5-10ms on a cache miss | Near-real-time permissions (revocation within 15 s; `fresh=True` for immediate) |
+
+### Caching and revocation latency
+
+Every cache below is **on by default**, **configurable**, and **disabled by `0`**. A cache TTL is a security property:
+it is the longest a revoked grant / revoked key / logged-out session can keep working **on your service**. The
+defaults match the Go SDK (`auth-sdk-go`).
+
+| What | Default | Env var (seconds) | What the TTL means |
+|------|---------|-------------------|--------------------|
+| Permission decision, allowed (server mode) | **15 s** | `AB0T_AUTH_PERMISSION_CACHE_TTL` | a revoked grant keeps passing for ≤ 15 s |
+| Permission decision, denied | **5 s** | `AB0T_AUTH_PERMISSION_CACHE_NEGATIVE_TTL` | a new grant is seen within ≤ 5 s |
+| API key, valid | **60 s** | `AB0T_AUTH_API_KEY_CACHE_TTL` | a revoked key keeps working for ≤ 60 s |
+| API key, rejected | **10 s** | `AB0T_AUTH_API_KEY_CACHE_NEGATIVE_TTL` | a newly created / re-enabled key works within ≤ 10 s |
+| Verified JWT | 60 s, never past the token's `exp` | `AB0T_AUTH_TOKEN_CACHE_TTL` | local verification only (see below) |
+| JWKS (public signing keys) | 300 s; unknown `kid` refetched at most once per 60 s | `AB0T_AUTH_JWKS_CACHE_TTL` | key rotation is picked up via the `kid` refetch |
+
+Rules that always hold:
+- **Errors are never cached.** A timeout, network error, `429` or `5xx` from the auth service is not stored; the
+  request that saw it is refused (fail closed) and the next request asks again. An expired entry is never served
+  because a refresh failed.
+- Unset permission/API-key TTLs derive from `AB0T_AUTH_TOKEN_CACHE_TTL`, so `AB0T_AUTH_TOKEN_CACHE_TTL=0` still turns
+  **every** cache off (strict mode), exactly as before.
+- Cache keys are SHA-256 hashes; a raw token or API key is never stored.
+
+**Per-call bypass for sensitive operations** (admin, money movement, ownership changes):
+
+```python
+# Skip every decision cache on this route: re-validate the credential and (server mode) ask /permissions/check
+@app.post("/payouts")
+async def payout(user=Depends(require_permission(auth, "payouts.create", fresh=True))):
+    ...
+
+# Or per call
+result = await verify_permission(client, config, token, user, "payouts.create", cache=cache, fresh=True)
+user = await auth.authenticate_or_raise(authorization, api_key, fresh=True)
+```
+
+**Local JWT verification does not see logout.** A JWT is verified locally (signature, `exp`, `aud`, `iss`) with no
+network call, so a server-side logout or session revocation is **not** visible until the token's own `exp`
+(access tokens are short-lived, ~15 minutes). If a route must refuse a logged-out session immediately, ask the auth
+service, which checks the session:
+- use `permission_check_mode="server"` with `fresh=True` on that route (`/permissions/check` re-validates the bearer), or
+- call `ab0t_auth.client.introspect_token(...)` and require `active is True`.
+
+Observability: `auth.cache_stats()` returns hit/miss counts, size and effective TTLs for the permission and API-key
+caches; JWT cache hits/misses are in `auth.metrics`. To drop an entry immediately: `auth.invalidate_api_key(key)`,
+`auth.invalidate_user_permissions(user_id)`, `auth.invalidate_token(token)`, or `auth.clear_caches()`.
 
 ### "Is this production-ready?"
 

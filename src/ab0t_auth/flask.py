@@ -31,7 +31,14 @@ from typing import Any, Callable, Literal, ParamSpec, Sequence, TypeVar
 
 from flask import Flask, Request, Response, g, jsonify, request
 
-from ab0t_auth.cache import JWKSCache, PermissionCache, TokenCache, create_caches
+from ab0t_auth.cache import (
+    ApiKeyCache,
+    JWKSCache,
+    PermissionCache,
+    TokenCache,
+    create_api_key_cache,
+    create_caches,
+)
 from ab0t_auth.client import create_http_client, validate_api_key
 from ab0t_auth.config import create_config
 from ab0t_auth.core import (
@@ -178,6 +185,7 @@ class Ab0tAuth:
         self._token_cache: TokenCache | None = None
         self._permission_cache: PermissionCache | None = None
         self._jwks_cache: JWKSCache | None = None
+        self._api_key_cache: ApiKeyCache | None = None
         self._logger = get_logger("ab0t_auth.flask")
         self._metrics = AuthMetrics()
 
@@ -211,6 +219,7 @@ class Ab0tAuth:
 
         # Initialize components
         self._token_cache, self._permission_cache, self._jwks_cache = create_caches(self._config)
+        self._api_key_cache = create_api_key_cache(self._config)
 
         if self._config.enable_jwt_auth:
             self._jwk_client = create_jwk_client(self._config)
@@ -311,35 +320,40 @@ class Ab0tAuth:
         self,
         authorization: str | None = None,
         api_key: str | None = None,
+        *,
+        fresh: bool = False,
     ) -> AuthResult:
         """
         Authenticate using token or API key.
 
         Returns AuthResult with success status and user.
+        `fresh=True` skips the token and API-key caches for this call (see AuthGuard.authenticate).
         """
+        extra: dict[str, Any] = {"fresh": True} if fresh else {}
+
         # Try JWT first
         if authorization and self.config.enable_jwt_auth:
-            result = self._authenticate_jwt(authorization)
+            result = self._authenticate_jwt(authorization, **extra)
             self._metrics.record_auth_attempt(result.success)
             if result.success:
                 return result
 
         # Try API key
         if api_key and self.config.enable_api_key_auth:
-            result = self._authenticate_api_key(api_key)
+            result = self._authenticate_api_key(api_key, **extra)
             self._metrics.record_auth_attempt(result.success)
             return result
 
         return AuthResult.fail("NO_CREDENTIALS", "No valid credentials provided")
 
-    def _authenticate_jwt(self, authorization: str) -> AuthResult:
-        """Authenticate using JWT token."""
+    def _authenticate_jwt(self, authorization: str, *, fresh: bool = False) -> AuthResult:
+        """Authenticate using JWT token. `fresh=True` skips the token-cache read."""
         token = parse_token_header(authorization, self.config.header_prefix)
         if not token:
             return AuthResult.fail("INVALID_HEADER", "Invalid Authorization header")
 
         # Check cache
-        if self._token_cache:
+        if self._token_cache and not fresh:
             cached = self._token_cache.get(token)
             if cached:
                 self._metrics.record_cache_access(hit=True)
@@ -366,17 +380,30 @@ class Ab0tAuth:
             self._logger.warning("Token validation error", error=str(e))
             return AuthResult.fail("VALIDATION_ERROR", "Token validation failed")
 
-    def _authenticate_api_key(self, api_key: str) -> AuthResult:
-        """Authenticate using API key (sync wrapper)."""
+    def _authenticate_api_key(self, api_key: str, *, fresh: bool = False) -> AuthResult:
+        """
+        Authenticate using API key (sync wrapper).
+
+        The auth service's answer is cached (valid 60 s, rejected 10 s by default; 0 disables); errors are never
+        cached and refuse the request. `fresh=True` skips the cache read.
+        """
+        cache = self._api_key_cache
         try:
-            # Run async validation in sync context
-            loop = asyncio.new_event_loop()
-            try:
-                client = create_http_client()
-                response = loop.run_until_complete(validate_api_key(client, self.config, api_key))
-                loop.run_until_complete(client.aclose())
-            finally:
-                loop.close()
+            response = cache.get(api_key) if (cache is not None and not fresh) else None
+            if response is None:
+                # Run async validation in sync context
+                loop = asyncio.new_event_loop()
+                try:
+                    client = create_http_client()
+                    response = loop.run_until_complete(
+                        validate_api_key(client, self.config, api_key)
+                    )
+                    loop.run_until_complete(client.aclose())
+                finally:
+                    loop.close()
+                # Only reached with a definite answer: validate_api_key raises on errors, so they are never cached.
+                if cache is not None:
+                    cache.set(api_key, response)
 
             if not response.valid:
                 return AuthResult.fail("INVALID_API_KEY", response.error or "Invalid API key")
@@ -451,6 +478,12 @@ class Ab0tAuth:
             return self._token_cache.invalidate(token)
         return False
 
+    def invalidate_api_key(self, api_key: str) -> bool:
+        """Invalidate the cached validation answer for an API key (e.g. after revoking it)."""
+        if self._api_key_cache is not None:
+            return self._api_key_cache.invalidate(api_key)
+        return False
+
     def clear_caches(self) -> None:
         """Clear all caches."""
         if self._token_cache:
@@ -459,6 +492,8 @@ class Ab0tAuth:
             self._permission_cache.clear()
         if self._jwks_cache:
             self._jwks_cache.clear()
+        if self._api_key_cache is not None:
+            self._api_key_cache.clear()
 
 
 # =============================================================================

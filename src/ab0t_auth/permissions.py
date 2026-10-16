@@ -8,7 +8,7 @@ Supports pattern matching for flexible permission schemes.
 from __future__ import annotations
 
 import fnmatch
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
@@ -189,16 +189,22 @@ async def verify_permission(
     resource_type: str | None = None,
     cache: PermissionCache | None = None,
     api_key: str | None = None,
+    fresh: bool = False,
 ) -> PermissionResult:
     """
     Verify permission with server (authoritative check).
 
     Async function for server-side verification.
-    Falls back to client-side if server unavailable.
+    On an auth-service failure the answer follows config.permission_fallback ("deny" by default - fail closed).
 
     Supports both Bearer token and API key authentication:
     - If token is provided, uses Authorization: Bearer header with token
     - If api_key is provided (and no token), sends API key as Bearer token
+
+    Caching: with a `cache`, an allowed answer is reused for the cache's ttl (default 15 s) and a denied answer for
+    its negative ttl (default 5 s). Errors are never cached. `fresh=True` skips the cache READ for this call (always
+    asks the auth service) and stores the new answer - use it for sensitive operations (admin, money movement,
+    ownership changes).
     """
     # Security hardening: ask with the credential that AUTHENTICATED this user. The guard tries the
     # bearer first and falls through to X-API-Key when the bearer is rejected locally (wrong audience, other service);
@@ -216,8 +222,8 @@ async def verify_permission(
     org_id = user.org_id or config.org_id
     use_cache = cache is not None and credential is not None
 
-    # Check cache first
-    if use_cache:
+    # Check cache first (unless the caller asked for a fresh answer)
+    if use_cache and not fresh:
         cached = cache.get(
             user.user_id, permission, resource_id, credential=credential, org_id=org_id
         )
@@ -283,12 +289,14 @@ async def verify_any_permission(
     resource_id: str | None = None,
     cache: PermissionCache | None = None,
     api_key: str | None = None,
+    fresh: bool = False,
 ) -> PermissionResult:
     """
     Verify if user has any of the specified permissions (server-side).
 
-    Async function.
+    Async function. `fresh=True` bypasses the permission cache for these checks (see verify_permission).
     """
+    extra: dict[str, Any] = {"fresh": True} if fresh else {}
     for perm in permissions:
         result = await verify_permission(
             client,
@@ -299,6 +307,7 @@ async def verify_any_permission(
             resource_id=resource_id,
             cache=cache,
             api_key=api_key,
+            **extra,
         )
         if result.allowed:
             return result
@@ -318,12 +327,14 @@ async def verify_all_permissions(
     resource_id: str | None = None,
     cache: PermissionCache | None = None,
     api_key: str | None = None,
+    fresh: bool = False,
 ) -> PermissionResult:
     """
     Verify if user has all specified permissions (server-side).
 
-    Async function.
+    Async function. `fresh=True` bypasses the permission cache for these checks (see verify_permission).
     """
+    extra: dict[str, Any] = {"fresh": True} if fresh else {}
     for perm in permissions:
         result = await verify_permission(
             client,
@@ -334,6 +345,7 @@ async def verify_all_permissions(
             resource_id=resource_id,
             cache=cache,
             api_key=api_key,
+            **extra,
         )
         if not result.allowed:
             return result

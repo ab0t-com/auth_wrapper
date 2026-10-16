@@ -3,6 +3,13 @@ JWT validation functions for Ab0t Auth.
 
 Pure functions for local JWT validation using JWKS.
 Follows RFC 7517 (JWK), RFC 7519 (JWT), and OpenID Connect Discovery.
+
+Revocation note: local verification checks the signature, `exp`/`nbf`, and (when configured) `aud`/`iss` - with NO
+network call. It therefore cannot see a server-side logout or session revocation: a revoked access token keeps
+verifying locally until its own `exp` (access tokens are short-lived, ~15 min). Where that matters, ask the auth
+service, which checks the session: `ab0t_auth.client.introspect_token()` (RFC 7662, `active` is False after logout),
+or `permission_check_mode="server"` with `fresh=True` on the sensitive route (POST /permissions/check re-validates
+the bearer server-side and bypasses the decision cache).
 """
 
 from __future__ import annotations
@@ -178,27 +185,33 @@ def build_jwks_url(config: AuthConfig) -> str:
     return f"{config.auth_url}/.well-known/jwks.json"
 
 
-JWKS_UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS = 30.0
+JWKS_UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS = 60.0
+"""At most one forced JWKS refetch per minute for an unknown `kid` (was 30 s up to 0.1.3; matches the Go SDK)."""
 
 
 class CooldownPyJWKClient(PyJWKClient):
     """
-    PyJWKClient that refreshes the JWKS for an UNKNOWN `kid` at most once per cooldown window.
+    PyJWKClient that refreshes the JWKS for an UNKNOWN `kid` at most once per cooldown window (default 60 s).
 
     Security hardening: PyJWT 2.8 / 2.11 (this package allows >=2.8) refetch the
     JWK set on EVERY token whose `kid` is not in the cached set. The fetch is synchronous (urllib) and runs on the
     event loop, so an unauthenticated caller sending random-`kid` tokens made the service fetch JWKS once per request
     (30 s default timeout). Key rotation still works: the first unknown kid after the window triggers one refresh.
+    The cooldown applies only to the FORCED refetch for an unknown kid; the regular JWKS refresh when the cached set
+    is older than `jwks_cache_ttl` is unaffected.
     """
 
     def __init__(
         self,
         *args: Any,
-        refresh_cooldown: float = JWKS_UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS,
+        refresh_cooldown: float | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._ab0t_refresh_cooldown = refresh_cooldown
+        # None = the module default, read at construction time (so it can be tuned before AuthGuard initializes).
+        self._ab0t_refresh_cooldown = (
+            JWKS_UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS if refresh_cooldown is None else refresh_cooldown
+        )
         self._ab0t_last_forced_refresh: float | None = None
 
     def get_signing_key(self, kid: str) -> Any:

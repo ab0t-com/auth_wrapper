@@ -147,6 +147,31 @@ class AuthSettings(BaseSettings):
         le=10000,
         description="Maximum number of cached token validations",
     )
+    # Decision-cache TTLs (seconds). Unset = derived from token_cache_ttl (see AuthConfig). 0 disables that cache.
+    permission_cache_ttl: int | None = Field(
+        default=None,
+        ge=0,
+        le=300,
+        description="Server-mode permission decision cache TTL for ALLOWED answers (default 15 s; 0 disables)",
+    )
+    permission_cache_negative_ttl: int | None = Field(
+        default=None,
+        ge=0,
+        le=300,
+        description="Permission decision cache TTL for DENIED answers (default 5 s; never above the positive TTL)",
+    )
+    api_key_cache_ttl: int | None = Field(
+        default=None,
+        ge=0,
+        le=300,
+        description="API-key validation cache TTL for VALID keys (default 60 s; 0 disables)",
+    )
+    api_key_cache_negative_ttl: int | None = Field(
+        default=None,
+        ge=0,
+        le=300,
+        description="API-key validation cache TTL for REJECTED keys (default 10 s; never above the positive TTL)",
+    )
 
     # Header configuration
     header_name: str = Field(
@@ -240,6 +265,10 @@ def settings_to_config(settings: AuthSettings) -> AuthConfig:
         enable_jwt_auth=settings.enable_jwt_auth,
         debug=settings.debug,
         permission_check_mode=settings.permission_check_mode,
+        permission_cache_ttl=settings.permission_cache_ttl,
+        permission_cache_negative_ttl=settings.permission_cache_negative_ttl,
+        api_key_cache_ttl=settings.api_key_cache_ttl,
+        api_key_cache_negative_ttl=settings.api_key_cache_negative_ttl,
     )
 
 

@@ -191,6 +191,16 @@ class AuthConfig:
     # - "deny": Reject the request (fail-closed, recommended for production)
     # - "client": Fall back to JWT claims (fail-open, maintains availability)
     permission_fallback: Literal["deny", "client"] = "deny"
+    # Decision-cache TTLs in seconds. A TTL is the revocation latency on this service. 0 disables that cache.
+    # None = derived from token_cache_ttl (so token_cache_ttl=0 still disables every cache):
+    #   permission: min(token_cache_ttl // 2, 15) -> 15 s by default (allowed answers from /permissions/check)
+    #   permission negative: 5 s (denied answers), never longer than the positive TTL
+    #   api key: min(token_cache_ttl, 60) -> 60 s by default (valid keys from /auth/validate-api-key)
+    #   api key negative: 10 s (rejected keys), never longer than the positive TTL
+    permission_cache_ttl: int | None = None
+    permission_cache_negative_ttl: int | None = None
+    api_key_cache_ttl: int | None = None
+    api_key_cache_negative_ttl: int | None = None
 
 
 # =============================================================================

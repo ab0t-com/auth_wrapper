@@ -5,7 +5,57 @@ All notable changes to ab0t-auth will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.4] - 2026-10-16
+
+Released 2026-10-16. Cache defaults aligned with the Go SDK (`auth-sdk-go`) so both SDKs behave the same. No public
+signature is removed or changed; everything new is optional and keyword-only. **Defaults change a security
+property (revocation latency) — read `migrations/v0.1.3-to-v0.1.4/MIGRATION.md`.** Every TTL is configurable and `0`
+disables that cache.
+
+### Changed
+
+- **Permission decision cache (server mode): 30 s → 15 s for `allowed`, and a separate 5 s for `denied`.**
+  Up to 0.1.3 both answers lived 30 s (derived as `min(token_cache_ttl // 2, 30)`); now
+  `min(token_cache_ttl // 2, 15)` for allowed and 5 s (never above the positive TTL) for denied. A revoked grant now
+  stops passing within 15 s (was 30 s); a new grant is seen within 5 s (was 30 s). `PermissionCache()` class default
+  `ttl` is now 15, with a new `negative_ttl` field.
+- **API-key validation is now cached: 60 s for a valid key, 10 s for a rejected key** (`AuthGuard` and the Flask
+  extension). Up to 0.1.3 every request carrying `X-API-Key` called `POST /auth/validate-api-key`. A revoked key can
+  now keep working on your service for up to 60 s. Keyed by SHA-256 of the key; errors are never cached.
+- **Unknown-`kid` JWKS refetch cooldown: 30 s → 60 s** (`JWKS_UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS`): at most one
+  forced refetch per minute, matching the Go SDK. Key rotation still works (the first unknown `kid` after the window
+  refetches once). The regular JWKS TTL is unchanged (300 s).
+
+### Added
+
+- Config (all optional; env prefix `AB0T_AUTH_`): `permission_cache_ttl`, `permission_cache_negative_ttl`,
+  `api_key_cache_ttl`, `api_key_cache_negative_ttl` (seconds, `0` disables, `0..300`). Unset = derived from
+  `token_cache_ttl`, so **`token_cache_ttl=0` still disables every cache**, as before. The four
+  `AB0T_AUTH_*_CACHE_*` env vars are honoured however the guard is built (not only via `AuthSettings`); a value set in
+  code wins; an invalid value (not 0–300) raises at start-up naming the variable.
+- **Per-call `fresh=True` bypass** for sensitive operations: `verify_permission` / `verify_any_permission` /
+  `verify_all_permissions`, `AuthGuard.authenticate` / `authenticate_or_raise`, the Flask `Ab0tAuth.authenticate`,
+  and the FastAPI dependencies `require_auth`, `require_permission`, `require_any_permission`,
+  `require_all_permissions`, `require_auth_and_permission`. Skips the cache read, asks the auth service, stores the
+  new answer.
+- `ApiKeyCache`, `create_api_key_cache(config)`, `resolve_cache_ttls(config)` and the `DEFAULT_*_CACHE_*TTL` constants
+  in `ab0t_auth.cache`; `AuthGuard.invalidate_api_key(key)` / `Ab0tAuth.invalidate_api_key(key)`;
+  `AuthGuard.cache_stats()` (hit/miss/size/effective TTLs for the permission and API-key caches).
+
+### Unchanged (verified, now covered by tests)
+
+- Token cache: 60 s default, **never served past the token's `exp`**, only successful validations are cached, an
+  expired entry is never served after a failed re-validation (fail closed). `TokenCache(ttl=0)` stores nothing.
+- Errors / `429` / `5xx` / network failures are never cached by any cache.
+- JWKS TTL default stays 300 s (the design allows up to 10 min; kept shorter because it also bounds how long a
+  signing key removed from the JWKS keeps verifying).
+
+### Security note — revocation latency
+
+Local JWT verification has no network call and **does not see a server-side logout or session revocation until the
+token's `exp`** (access tokens are ~15 min). For routes that must refuse a logged-out session immediately use
+`permission_check_mode="server"` with `fresh=True`, or `ab0t_auth.client.introspect_token()`. See the README section
+"Caching and revocation latency".
 
 ## [0.1.3] - 2026-10-09
 
