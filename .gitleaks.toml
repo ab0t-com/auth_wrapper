@@ -1,0 +1,26 @@
+# gitleaks config for ab0t-com/auth_wrapper (PUBLIC repo).
+# Extends the full default ruleset and adds house rules. No path is allowlisted.
+title = "ab0t-com/auth_wrapper"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Truncated doc examples only (a real secret never contains a literal '...' or '…')"
+regexTarget = "secret"
+regexes = [
+  '''\.\.\.''',
+  '''…''',
+]
+
+# ── Guard: service-admin password DERIVED from a public identifier ───────────────
+# Never ship a credential computed from a public identifier (e.g. a service name plus a fixed
+# suffix such as <Name>Admin<year>!Secure). Any occurrence of such a pattern (script, doc,
+# example) is a finding; generate a random password and save it to the
+# 0600 credentials file instead. Matches only the fixed suffix, so a placeholder allowlist
+# (<...>, {VAR}) can never hide a templated derivation.
+[[rules]]
+id = "ab0t-derived-service-admin-password"
+description = "Service-admin password derived from the service name (<Name>Admin20NN!Secure) is guessable"
+regex = '''(?i)admin20[0-9]{2}!secure'''
+keywords = ["admin20"]

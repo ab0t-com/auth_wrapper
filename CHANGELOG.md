@@ -5,6 +5,59 @@ All notable changes to ab0t-auth will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-10-16
+
+Patch release: four fixes found by an adversarial test pass on 0.1.4. No public signature is removed or changed; the
+two new parameters are optional and keyword-only. **Safe to upgrade; nothing in this release stops a service from
+starting.** A decision-cache TTL **set in code** outside the documented 0–300 s range is no longer honoured: it is
+clamped into range with a warning (see Fixed → TTL range). Read `migrations/v0.1.4-to-v0.1.5/MIGRATION.md`.
+
+### Fixed
+
+- **MEDIUM (security): `resource_type` is now part of the permission-cache key** (`cache.py`, `permissions.py`).
+  `verify_permission(..., resource_id=, resource_type=)` sent `resource_type` to `/permissions/check` but cached the
+  answer without it, so an `allowed` for `("x.read", resource_type="doc", resource_id="42")` was served for
+  `("x.read", resource_type="invoice", resource_id="42")` for up to 15 s (and a denial across types for 5 s) without
+  asking the auth service. Every input of the question sent to `/permissions/check` (credential, org, permission,
+  resource type, resource id) is now in the key. Affected: direct callers of `verify_permission` that pass
+  `resource_type`. The FastAPI dependencies never pass a resource and were not affected.
+- **LOW: the permission-cache key is injective** (`cache.py`). The key was the parts joined with `":"`, so a
+  permission containing `:` could collide with permission + resource: `("docs:read", resource_id="x")` and
+  `("docs:read:x")` shared one entry. The key is now a fixed-length tuple, one slot per input. `invalidate_user(id)`
+  now matches the user id exactly (before, a prefix match on `"<id>:"` also dropped the entries of a user whose id
+  starts with `"<id>:"`; it never dropped too few).
+- **LOW-MEDIUM: a lower-case `bearer` scheme is forwarded correctly** (`client.py`). Authentication accepts the scheme
+  case-insensitively (RFC 7235 §2.1 / RFC 6750 §2.1), but `check_permission`, `validate_token` and
+  `get_user_permissions` re-prefixed with a case-sensitive check, so `Authorization: bearer <t>` reached the auth
+  service as `Bearer bearer <t>` and was refused: in `permission_check_mode="server"` a valid token got a 401/403
+  (fail-closed, on a cold cache). The scheme is now removed case-insensitively and re-added as `Bearer <t>`, by the
+  same rule that fingerprints the credential for the permission cache, so the cached answer and the forwarded
+  credential always match. A whitespace-only bearer now falls back to the API key, like the cache fingerprint
+  (before, an empty `Bearer ` was sent).
+- **LOW: TTL range — a decision-cache TTL set in code is kept inside the documented range** (`cache.py`). The 0.1.4
+  docs give `0–300` for the `AuthConfig` fields `permission_cache_ttl`, `permission_cache_negative_ttl`,
+  `api_key_cache_ttl`, `api_key_cache_negative_ttl`, and an env value outside it already raised. A value set in code
+  was not checked: `AuthConfig(api_key_cache_ttl=86_400)` let a revoked key keep working for a day. It is now
+  **clamped** (above 300 → 300; below 0 → 0, i.e. that cache off — what a negative value already did) and logged once
+  at WARNING on the `ab0t_auth.cache` logger, naming the field (`AuthConfig.api_key_cache_ttl=86400 is outside the
+  documented 0-300 seconds; using 300. …`). It does not raise: a patch release must not stop a service from
+  starting. A later minor release may refuse such values, as the env var does. A non-integer value raises as
+  before. Values 0–300 and the env vars behave exactly as before.
+
+### Added
+
+- `resource_type=` (keyword-only, optional) on `verify_any_permission` and `verify_all_permissions` (it is sent with
+  every check and keyed, as in `verify_permission`), and on `PermissionCache.get` / `PermissionCache.set`.
+- `ab0t_auth.cache.bearer_credential(value)`: the credential inside an Authorization value (scheme removed,
+  case-insensitive).
+
+### Changed (internal)
+
+- `ab0t_auth.cache.create_permission_cache_key(...)` returns a tuple (was a `":"`-joined string) and accepts an
+  optional `resource_type`. It is not exported from `ab0t_auth` and not documented; code that inspected
+  `PermissionCache._cache` keys as strings must treat them as tuples. The cache is in memory only, so no stored data
+  changes on upgrade.
+
 ## [0.1.4] - 2026-10-16
 
 Released 2026-10-16. Cache defaults aligned with the Go SDK (`auth-sdk-go`) so both SDKs behave the same. No public

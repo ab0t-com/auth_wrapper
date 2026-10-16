@@ -773,12 +773,12 @@ question: I run a 20-person company. We make a B2B invoicing app called "BillFlo
       "redirect_uri": "https://app.billflow.com/callback"
     }'
 
-  Or use the npm SDK:
+  Or use the browser SDK, served by the auth service (not on npm; a package called `@authmesh/sdk` on npm is not ours):
 
-  import { AuthMeshClient } from '@authmesh/sdk';
+  <script src="https://auth.service.ab0t.com/login/_static/authmesh.global.js"></script>
 
-  const auth = new AuthMeshClient({
-    domain: 'auth.service.ab0t.com',
+  const auth = new AuthMesh.AuthMeshClient({
+    domain: 'https://auth.service.ab0t.com',
     org: 'coastal-accounting',
     clientId: 'CLIENT_ID',
     redirectUri: 'https://app.billflow.com/callback'
@@ -793,8 +793,9 @@ question: I run a 20-person company. We make a B2B invoicing app called "BillFlo
   // Get current user
   const user = auth.getUser();
 
-  // Refresh token when needed (automatic)
-  const freshToken = await auth.getAccessToken();
+  // Ask for a valid token right before each request (refreshes when needed; never store it)
+  const freshToken = await auth.getValidToken();
+  // or let the SDK attach it: await auth.authFetch('/api/invoices')
 
   ---
   Step 12: Login-as-Join (Multi-Org Users)

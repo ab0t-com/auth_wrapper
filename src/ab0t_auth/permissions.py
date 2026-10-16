@@ -215,9 +215,11 @@ async def verify_permission(
     elif user.auth_method == AuthMethod.JWT:
         api_key = None
 
-    # Permission cache keying: the cached answer belongs to the CREDENTIAL that asked, in the ORG it asked in — never to
-    # the user id alone (an owner's / wide key's allow must not authorise the owner's narrow key; a narrow key's deny
-    # must not lock the owner out). No credential → never read or write the cache.
+    # Permission cache keying: the cached answer belongs to the CREDENTIAL that asked, in the ORG it asked in, for
+    # exactly the question sent (permission, resource_type, resource_id) — never to the user id alone (an owner's /
+    # wide key's allow must not authorise the owner's narrow key; a narrow key's deny must not lock the owner out; an
+    # allow for one resource type must not answer another type with the same id). No credential → never read or write
+    # the cache.
     credential = permission_credential_fingerprint(token, api_key)
     org_id = user.org_id or config.org_id
     use_cache = cache is not None and credential is not None
@@ -225,7 +227,12 @@ async def verify_permission(
     # Check cache first (unless the caller asked for a fresh answer)
     if use_cache and not fresh:
         cached = cache.get(
-            user.user_id, permission, resource_id, credential=credential, org_id=org_id
+            user.user_id,
+            permission,
+            resource_id,
+            credential=credential,
+            org_id=org_id,
+            resource_type=resource_type,
         )
         if cached is not None:
             if cached:
@@ -252,6 +259,7 @@ async def verify_permission(
                 resource_id,
                 credential=credential,
                 org_id=org_id,
+                resource_type=resource_type,
             )
 
         if response.allowed:
@@ -287,6 +295,7 @@ async def verify_any_permission(
     user: AuthenticatedUser,
     *permissions: str,
     resource_id: str | None = None,
+    resource_type: str | None = None,
     cache: PermissionCache | None = None,
     api_key: str | None = None,
     fresh: bool = False,
@@ -295,6 +304,7 @@ async def verify_any_permission(
     Verify if user has any of the specified permissions (server-side).
 
     Async function. `fresh=True` bypasses the permission cache for these checks (see verify_permission).
+    `resource_type` / `resource_id` are sent with every check and are part of the cache key (as in verify_permission).
     """
     extra: dict[str, Any] = {"fresh": True} if fresh else {}
     for perm in permissions:
@@ -305,6 +315,7 @@ async def verify_any_permission(
             user,
             perm,
             resource_id=resource_id,
+            resource_type=resource_type,
             cache=cache,
             api_key=api_key,
             **extra,
@@ -325,6 +336,7 @@ async def verify_all_permissions(
     user: AuthenticatedUser,
     *permissions: str,
     resource_id: str | None = None,
+    resource_type: str | None = None,
     cache: PermissionCache | None = None,
     api_key: str | None = None,
     fresh: bool = False,
@@ -333,6 +345,7 @@ async def verify_all_permissions(
     Verify if user has all specified permissions (server-side).
 
     Async function. `fresh=True` bypasses the permission cache for these checks (see verify_permission).
+    `resource_type` / `resource_id` are sent with every check and are part of the cache key (as in verify_permission).
     """
     extra: dict[str, Any] = {"fresh": True} if fresh else {}
     for perm in permissions:
@@ -343,6 +356,7 @@ async def verify_all_permissions(
             user,
             perm,
             resource_id=resource_id,
+            resource_type=resource_type,
             cache=cache,
             api_key=api_key,
             **extra,

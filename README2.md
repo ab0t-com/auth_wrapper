@@ -21,14 +21,16 @@ A functional, async-first authentication and authorization library for **FastAPI
 
 ```bash
 # Install with FastAPI support
-pip install ab0t-auth[fastapi]
+pip install "ab0t-auth[fastapi] @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"
 
 # Install with Flask support
-pip install ab0t-auth[flask]
+pip install "ab0t-auth[flask] @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"
 
 # Install with both frameworks
-pip install ab0t-auth[all]
+pip install "ab0t-auth[all] @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"
 ```
+
+Not on PyPI: a package called `ab0t-auth` on PyPI is not ours. Install from GitHub as shown.
 
 ## Quick Start
 

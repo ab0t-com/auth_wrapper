@@ -59,6 +59,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 echo -e "${MAGENTA}=== $SERVICE_NAME Registration ===${NC}"
+echo "Target auth: $AUTH_SERVICE_URL"
 echo "Service ID: $SERVICE_ID"
 echo "Description: $SERVICE_DESC"
 echo "Loading permissions from: $PERMISSIONS_FILE"
@@ -85,19 +86,68 @@ fi
 # Step 1: Create Service Admin Account
 echo -e "${BLUE}Step 1: Setting up Admin Account${NC}"
 
-# Use existing credentials or derive from service ID
+# Use existing credentials, else the admin email is derived from the service ID
 if [ -z "$ADMIN_EMAIL" ]; then
     # Derive admin email from service ID: resource-service -> mike+resource-service@ab0t.com
     ADMIN_EMAIL="mike+${SERVICE_ID}@ab0t.com"
-    # Derive password from service name: Resource Service -> ResourceServiceAdmin2024!Secure
-    SERVICE_NAME_NO_SPACES=$(echo "$SERVICE_NAME" | tr -d ' ')
-    ADMIN_PASSWORD="${SERVICE_NAME_NO_SPACES}Admin2024!Secure"
     echo "  Derived admin: $ADMIN_EMAIL"
+fi
+
+# ── Service-admin password: saved credentials file, else RANDOM ─────────────────
+# (ticket auth/output/tickets/20261016_service_admin_passwords_derived_and_public)
+# A password found in the saved credentials file is used unchanged. Otherwise a
+# random password is generated and written to the credentials file (mode 0600)
+# BEFORE the account is registered, so a crash can never lose it. The password
+# is never printed and never placed on a command line (it travels on stdin).
+admin_pw_generate() {
+  local raw=""
+  if command -v openssl >/dev/null 2>&1; then
+    raw="$(openssl rand -base64 48 | tr -d '/+=\n')"
+  else
+    raw="$(head -c 48 /dev/urandom | base64 | tr -d '/+=\n')"
+  fi
+  if [ "${#raw}" -lt 40 ]; then
+    echo "ERROR: could not generate a random admin password" >&2
+    return 1
+  fi
+  # 40 random characters + one of each class the auth password policy requires.
+  printf '%s' "${raw:0:40}-Aa9"
+}
+# printf '%s' "$ADMIN_PASSWORD" | admin_pw_save <creds-file> <admin-email>
+admin_pw_save() {
+  local f="$1" email="$2" tmp
+  if [ -s "$f" ] && [ -n "$(jq -r '.admin.password? // empty' "$f" 2>/dev/null)" ]; then
+    echo "ERROR: $f already holds an admin password; refusing to overwrite it" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$f")" || return 1
+  tmp="$(umask 077 && mktemp "$f.XXXXXX")" || return 1
+  if [ -s "$f" ] && jq -e . "$f" >/dev/null 2>&1; then
+    jq -R --arg e "$email" --slurpfile old "$f" \
+      '. as $p | $old[0] | .admin = ((.admin // {}) + {email: $e, password: $p})' > "$tmp" || return 1
+  else
+    jq -R --arg e "$email" \
+      '{admin: {email: $e, password: .}, _status: "admin password saved before registration"}' > "$tmp" || return 1
+  fi
+  chmod 600 "$tmp" && mv -f "$tmp" "$f"
+}
+# Make sure a credentials file exists with mode 0600 before it is (re)written or copied.
+admin_creds_secure() {
+  ( umask 077 && : >> "$1" ) && chmod 600 "$1"
+}
+
+if [ -z "$ADMIN_PASSWORD" ] || [ "$ADMIN_PASSWORD" = "null" ]; then
+  ADMIN_PASSWORD="$(admin_pw_generate)" || exit 1
+  printf '%s' "$ADMIN_PASSWORD" | admin_pw_save "$CREDS_FILE" "$ADMIN_EMAIL" || {
+    echo "ERROR: could not save the generated admin password to $CREDS_FILE; not registering"
+    exit 1
+  }
+  echo "  Generated a random admin password (not shown), saved to $CREDS_FILE (mode 0600)"
 fi
 
 REGISTER_RESPONSE=$(curl -s -X POST "$AUTH_SERVICE_URL/auth/register" \
     -H "Content-Type: application/json" \
-    -d '{
+    -d @- <<<'{
         "email": "'"$ADMIN_EMAIL"'",
         "password": "'"$ADMIN_PASSWORD"'",
         "name": "'"$SERVICE_NAME"' Admin"
@@ -113,7 +163,7 @@ else
 
     LOGIN_RESPONSE=$(curl -s -X POST "$AUTH_SERVICE_URL/auth/login" \
         -H "Content-Type: application/json" \
-        -d "{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASSWORD\"}" 2>&1)
+        -d @- <<<"{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASSWORD\"}" 2>&1)
 
     if echo "$LOGIN_RESPONSE" | grep -q "access_token"; then
         echo -e "${GREEN}✓ Login successful${NC}"
@@ -124,6 +174,7 @@ else
         echo -e "${RED}✗ Login failed${NC}"
         echo "Registration response: $REGISTER_RESPONSE"
         echo "Login response: $LOGIN_RESPONSE"
+        echo "If this admin account already exists, its password must be in the saved credentials file (admin.password); this script never guesses one."
         exit 1
     fi
 fi
@@ -184,7 +235,7 @@ echo -e "${BLUE}Step 3: Logging in with Organization Context${NC}"
 
 ORG_LOGIN=$(curl -s -X POST "$AUTH_SERVICE_URL/auth/login" \
     -H "Content-Type: application/json" \
-    -d "{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASSWORD\", \"org_id\": \"$ORG_ID\"}")
+    -d @- <<<"{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASSWORD\", \"org_id\": \"$ORG_ID\"}")
 
 ORG_TOKEN=$(echo "$ORG_LOGIN" | jq -r '.access_token')
 
@@ -324,7 +375,8 @@ else
 fi
 
 # Backup existing credentials before overwriting
-if [ -f "$CREDS_FILE" ]; then
+admin_creds_secure "$CREDS_FILE"
+if [ -s "$CREDS_FILE" ]; then
     BACKUP_FILE="$CREDS_FILE.bak.$(date +%Y%m%d_%H%M%S)"
     cp "$CREDS_FILE" "$BACKUP_FILE"
     echo -e "${CYAN}Backed up existing credentials to: $BACKUP_FILE${NC}"

@@ -1545,9 +1545,10 @@ if [ -f "$CREDS_FILE" ]; then
     ADMIN_EMAIL=$(jq -r '.admin.email' "$CREDS_FILE")
     ADMIN_PASSWORD=$(jq -r '.admin.password' "$CREDS_FILE")
 else
-    # Derive credentials from service ID
     ADMIN_EMAIL="admin+${SERVICE_ID}@company.com"
-    ADMIN_PASSWORD="${SERVICE_ID}Admin2024!Secure"
+    # NEVER derive the password from the service id/name — generate a random one and save it to
+    # $CREDS_FILE (mode 0600) BEFORE registering. scripts/register-service-permissions.sh does this.
+    ADMIN_PASSWORD="$(openssl rand -base64 48 | tr -d '/+=\n' | cut -c1-40)-Aa9"
 fi
 
 # Step 1: Create/login admin account
