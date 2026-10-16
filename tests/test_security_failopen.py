@@ -116,7 +116,7 @@ def user_with_jwt_permissions() -> AuthenticatedUser:
 
 # =============================================================================
 # BUG-003: Server-side permission check fails open
-# permissions.py:228 — except Exception falls back to client-side JWT check
+# — except Exception falls back to client-side JWT check
 # =============================================================================
 
 
@@ -265,7 +265,7 @@ class TestBug003PermissionFailOpen:
 
 # =============================================================================
 # BUG-004: "api_key_user" fallback on null user_id
-# guard.py:449 — user_id=response.user_id or "api_key_user"
+# — user_id=response.user_id or "api_key_user"
 # =============================================================================
 
 
@@ -336,7 +336,7 @@ class TestBug004ApiKeyUserFallback:
 
 # =============================================================================
 # BUG-005: tuple() on string permissions explodes to chars
-# client.py:184, 236, 339
+# 
 # =============================================================================
 
 
@@ -389,7 +389,7 @@ class TestBug005StringPermissions:
 
 # =============================================================================
 # BUG-006: Middleware path exclusion too loose
-# middleware.py:145 — prefix match overreaches
+# — prefix match overreaches
 # =============================================================================
 
 

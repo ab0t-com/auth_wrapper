@@ -37,9 +37,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Sequence
 
-from ab0t_auth.core import AuthenticatedUser, AuthConfig
+from ab0t_auth.core import AuthConfig, AuthenticatedUser
 from ab0t_auth.errors import AuthError, PermissionDeniedError
-
 
 # =============================================================================
 # Tenant Types
@@ -49,23 +48,23 @@ from ab0t_auth.errors import AuthError, PermissionDeniedError
 class TenantExtractionStrategy(str, Enum):
     """How to extract tenant ID from request."""
 
-    TOKEN = "token"           # From JWT claims (org_id or tenant_id)
-    HEADER = "header"         # From X-Tenant-ID header
-    PATH = "path"             # From URL path parameter
-    SUBDOMAIN = "subdomain"   # From request host subdomain
-    QUERY = "query"           # From query parameter
+    TOKEN = "token"  # From JWT claims (org_id or tenant_id)
+    HEADER = "header"  # From X-Tenant-ID header
+    PATH = "path"  # From URL path parameter
+    SUBDOMAIN = "subdomain"  # From request host subdomain
+    QUERY = "query"  # From query parameter
 
 
 class OrgRelationship(str, Enum):
     """Relationship between organizations."""
 
-    SELF = "self"             # Same organization
-    PARENT = "parent"         # Parent organization
-    CHILD = "child"           # Child organization
-    SIBLING = "sibling"       # Same parent
-    ANCESTOR = "ancestor"     # Any ancestor
-    DESCENDANT = "descendant" # Any descendant
-    NONE = "none"             # No relationship
+    SELF = "self"  # Same organization
+    PARENT = "parent"  # Parent organization
+    CHILD = "child"  # Child organization
+    SIBLING = "sibling"  # Same parent
+    ANCESTOR = "ancestor"  # Any ancestor
+    DESCENDANT = "descendant"  # Any descendant
+    NONE = "none"  # No relationship
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +131,9 @@ class TenantContext:
         """Check if org_id is in the current org hierarchy."""
         return org_id in self.org_path or org_id == self.org_id
 
-    def can_access_org(self, target_org_id: str, *, allow_ancestors: bool = True, allow_descendants: bool = True) -> bool:
+    def can_access_org(
+        self, target_org_id: str, *, allow_ancestors: bool = True, allow_descendants: bool = True
+    ) -> bool:
         """
         Check if user can access target organization.
 
@@ -174,14 +175,17 @@ class TenantConfig:
 
     # Validation
     enforce_tenant_isolation: bool = True  # Require tenant_id match
-    enforce_org_isolation: bool = False     # Require org_id match
-    allow_cross_tenant_admin: bool = True   # Allow admins to access other tenants
+    # Require org_id match. Security hardening: default flipped False → True (fail-closed). With False,
+    # validate_org_access / check_org_permission returned True for ANY requested org (a caller in org A was allowed
+    # into org B). Every ab0t service already sets True explicitly; opt out with enforce_org_isolation=False.
+    enforce_org_isolation: bool = True
+    allow_cross_tenant_admin: bool = True  # Allow admins to access other tenants
     cross_tenant_permission: str = "admin:cross_tenant"
 
     # Organization hierarchy
     enable_org_hierarchy: bool = True
-    allow_ancestor_access: bool = True      # Can access parent orgs
-    allow_descendant_access: bool = True    # Can access child orgs
+    allow_ancestor_access: bool = True  # Can access parent orgs
+    allow_descendant_access: bool = True  # Can access child orgs
 
 
 # =============================================================================
@@ -359,17 +363,13 @@ def validate_tenant_context(
 
     # Validate tenant access
     if ctx.requested_tenant_id:
-        allowed, reason = validate_tenant_access(
-            ctx.user, ctx.requested_tenant_id, config
-        )
+        allowed, reason = validate_tenant_access(ctx.user, ctx.requested_tenant_id, config)
         if not allowed:
             raise TenantAccessDeniedError(reason or "Tenant access denied")
 
     # Validate org access
     if ctx.requested_org_id:
-        allowed, reason = validate_org_access(
-            ctx.user, ctx.requested_org_id, config
-        )
+        allowed, reason = validate_org_access(ctx.user, ctx.requested_org_id, config)
         if not allowed:
             raise OrgAccessDeniedError(reason or "Organization access denied")
 
@@ -509,10 +509,12 @@ def build_org_scoped_permission(
 # Import guard to avoid circular imports
 _guard_type = None
 
+
 def _get_guard_type():
     global _guard_type
     if _guard_type is None:
         from ab0t_auth.guard import AuthGuard
+
         _guard_type = AuthGuard
     return _guard_type
 
@@ -546,7 +548,7 @@ def require_tenant(
         request: Any,  # Request
         **path_params,
     ) -> TenantContext:
-        from fastapi import Request, Header
+        from fastapi import Header, Request
 
         # Get authenticated user first
         user = await guard.authenticate_or_raise(
@@ -694,6 +696,7 @@ def get_tenant_context_flask() -> TenantContext | None:
     """
     try:
         from flask import g
+
         return getattr(g, "tenant_context", None)
     except ImportError:
         return None
@@ -717,7 +720,8 @@ def tenant_required(
     def decorator(f):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
-            from flask import request, g
+            from flask import g, request
+
             from ab0t_auth.flask import get_current_user
 
             user = get_current_user()
@@ -740,7 +744,9 @@ def tenant_required(
             g.tenant_context = validate_tenant_context(ctx, cfg)
 
             return f(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 

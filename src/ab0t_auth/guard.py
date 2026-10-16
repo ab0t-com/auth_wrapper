@@ -14,17 +14,25 @@ import httpx
 from jwt import PyJWKClient
 
 from ab0t_auth.cache import (
+    ApiKeyCache,
     JWKSCache,
     PermissionCache,
     TokenCache,
+    create_api_key_cache,
     create_caches,
 )
 from ab0t_auth.client import (
     create_http_client,
     validate_api_key,
-    validate_token as validate_token_remote,
 )
-from ab0t_auth.config import AuthSettings, BypassConfig, create_config, load_bypass_config, settings_to_config
+from ab0t_auth.client import validate_token as validate_token_remote
+from ab0t_auth.config import (
+    AuthSettings,
+    BypassConfig,
+    create_config,
+    load_bypass_config,
+    settings_to_config,
+)
 from ab0t_auth.core import (
     AuthConfig,
     AuthContext,
@@ -130,9 +138,8 @@ class AuthGuard:
         self._jwk_client: PyJWKClient | None = None
 
         # Initialize caches
-        self._token_cache, self._permission_cache, self._jwks_cache = create_caches(
-            self._config
-        )
+        self._token_cache, self._permission_cache, self._jwks_cache = create_caches(self._config)
+        self._api_key_cache: ApiKeyCache = create_api_key_cache(self._config)
 
         # Load bypass configuration (for testing/development)
         self._bypass_config = load_bypass_config()
@@ -188,6 +195,17 @@ class AuthGuard:
             jwt_enabled=self._config.enable_jwt_auth,
             api_key_enabled=self._config.enable_api_key_auth,
         )
+        # Security hardening: with no audience (or verify_aud off) a JWT minted for ANY other mesh
+        # service is accepted here. Not changed to a hard failure (would break existing deployments) — made loud.
+        if self._config.enable_jwt_auth and (
+            not self._config.audience or not self._config.verify_aud
+        ):
+            self._logger.warning(
+                "JWT audience is NOT verified: tokens issued for other services are accepted. "
+                "Set AB0T_AUTH_AUDIENCE (and keep AB0T_AUTH_VERIFY_AUD=true) in production.",
+                audience=self._config.audience,
+                verify_aud=self._config.verify_aud,
+            )
 
     async def shutdown(self) -> None:
         """
@@ -202,6 +220,7 @@ class AuthGuard:
         self._token_cache.clear()
         self._permission_cache.clear()
         self._jwks_cache.clear()
+        self._api_key_cache.clear()
 
         self._initialized = False
         self._logger.info("AuthGuard shutdown complete")
@@ -267,12 +286,18 @@ class AuthGuard:
         self,
         authorization: str | None = None,
         api_key: str | None = None,
+        *,
+        fresh: bool = False,
     ) -> AuthResult:
         """
         Authenticate request using token or API key.
 
         Main authentication entry point.
         Returns AuthResult - check .success before using .user.
+
+        `fresh=True` skips the token and API-key caches for this call: the JWT is re-verified locally and the API key
+        is re-validated with the auth service (the fresh answer is then cached). Note a JWT is still verified LOCALLY
+        - local verification cannot see a server-side logout; see ab0t_auth.jwt for the strict options.
         """
         # Check for bypass first (testing/development only)
         bypass_result = self._check_auth_bypass()
@@ -284,10 +309,12 @@ class AuthGuard:
             await self.initialize()
 
         timer = Timer().start()
+        # Pass `fresh` only when set, so a subclass overriding the (internal) one-argument methods keeps working.
+        extra: dict[str, Any] = {"fresh": True} if fresh else {}
 
         # Try JWT authentication first
         if authorization and self._config.enable_jwt_auth:
-            result = await self._authenticate_jwt(authorization)
+            result = await self._authenticate_jwt(authorization, **extra)
             timer.stop()
 
             log_auth_attempt(
@@ -305,7 +332,7 @@ class AuthGuard:
 
         # Try API key authentication
         if api_key and self._config.enable_api_key_auth:
-            result = await self._authenticate_api_key(api_key)
+            result = await self._authenticate_api_key(api_key, **extra)
             timer.stop()
 
             log_auth_attempt(
@@ -330,13 +357,18 @@ class AuthGuard:
         self,
         authorization: str | None = None,
         api_key: str | None = None,
+        *,
+        fresh: bool = False,
     ) -> AuthenticatedUser:
         """
         Authenticate and return user or raise AuthError.
 
-        Convenience method that raises on failure.
+        Convenience method that raises on failure. `fresh=True`: see authenticate().
         """
-        result = await self.authenticate(authorization, api_key)
+        if fresh:
+            result = await self.authenticate(authorization, api_key, fresh=True)
+        else:
+            result = await self.authenticate(authorization, api_key)
 
         if not result.success or result.user is None:
             if result.error_code == "NO_CREDENTIALS":
@@ -351,11 +383,11 @@ class AuthGuard:
 
         return result.user
 
-    async def _authenticate_jwt(self, authorization: str) -> AuthResult:
+    async def _authenticate_jwt(self, authorization: str, *, fresh: bool = False) -> AuthResult:
         """
         Authenticate using JWT token.
 
-        Internal method - handles JWT validation flow.
+        Internal method - handles JWT validation flow. `fresh=True` skips the token-cache read.
         """
         # Parse token from header
         token = parse_token_header(authorization, self._config.header_prefix)
@@ -366,7 +398,7 @@ class AuthGuard:
             )
 
         # Check cache first
-        cached_entry = self._token_cache.get(token)
+        cached_entry = None if fresh else self._token_cache.get(token)
         if cached_entry:
             self._metrics.record_cache_access(hit=True)
             log_token_validation(
@@ -421,23 +453,40 @@ class AuthGuard:
                 method="jwt",
                 error=str(e),
             )
-            return AuthResult.fail("VALIDATION_ERROR", str(e))
+            return AuthResult.fail(
+                "VALIDATION_ERROR", "Token validation failed"
+            )  # detail logged above
 
-    async def _authenticate_api_key(self, api_key: str) -> AuthResult:
+    async def _authenticate_api_key(self, api_key: str, *, fresh: bool = False) -> AuthResult:
         """
         Authenticate using API key.
 
         Internal method - validates API key with Ab0t service.
+
+        The auth service's answer is cached (ApiKeyCache: valid 60 s, rejected 10 s by default; config
+        api_key_cache_ttl / api_key_cache_negative_ttl, 0 disables). An error (network, 429, 5xx) is never cached and
+        refuses this request (fail closed). `fresh=True` skips the cache read.
         """
         if not self._http_client:
             return AuthResult.fail("NOT_INITIALIZED", "AuthGuard not initialized")
 
+        # Compatibility: some services running <= 0.1.3 wrap this method to cache API keys in self._token_cache, and
+        # stand down once this method's own source refers to _token_cache. This method now caches API-key answers
+        # itself (self._api_key_cache), so such a wrapper must stand down: a second layer would re-fill from this
+        # one and defeat its own invalidation. Keep this note (the wrappers look for it).
+        cache: ApiKeyCache | None = getattr(self, "_api_key_cache", None)
+
         try:
-            response = await validate_api_key(
-                self._http_client,
-                self._config,
-                api_key,
-            )
+            response = cache.get(api_key) if (cache is not None and not fresh) else None
+            if response is None:
+                response = await validate_api_key(
+                    self._http_client,
+                    self._config,
+                    api_key,
+                )
+                # Only reached with a definite answer: validate_api_key raises on errors, so they are never cached.
+                if cache is not None:
+                    cache.set(api_key, response)
 
             if not response.valid:
                 return AuthResult.fail(
@@ -465,7 +514,9 @@ class AuthGuard:
         except AuthError as e:
             return AuthResult.fail(e.code, e.message)
         except Exception as e:
-            return AuthResult.fail("API_KEY_ERROR", str(e))
+            # the raw exception text is logged, never returned to the caller.
+            self._logger.warning("API key validation error", error=str(e))
+            return AuthResult.fail("API_KEY_ERROR", "API key validation failed")
 
     # =========================================================================
     # Authorization Methods
@@ -518,11 +569,47 @@ class AuthGuard:
         """
         return self._permission_cache.invalidate_user(user_id)
 
+    def invalidate_api_key(self, api_key: str) -> bool:
+        """
+        Invalidate the cached validation answer for an API key.
+
+        Call when a key is known to be revoked (e.g. your service revoked it). Returns True if it was cached.
+        """
+        return self._api_key_cache.invalidate(api_key)
+
     def clear_caches(self) -> None:
         """Clear all caches."""
         self._token_cache.clear()
         self._permission_cache.clear()
         self._jwks_cache.clear()
+        self._api_key_cache.clear()
+
+    def cache_stats(self) -> dict[str, dict[str, int]]:
+        """
+        Decision-cache counters and effective TTLs, for observability.
+
+        {"permission": {"hits", "misses", "size", "ttl", "negative_ttl"},
+         "api_key":    {"hits", "misses", "size", "ttl", "negative_ttl"}}
+        (JWT token-cache hits/misses are in `metrics`.)
+        """
+        perm = self._permission_cache
+        key = self._api_key_cache
+        return {
+            "permission": {
+                "hits": perm.hits,
+                "misses": perm.misses,
+                "size": perm.size,
+                "ttl": perm.ttl,
+                "negative_ttl": perm.effective_negative_ttl,
+            },
+            "api_key": {
+                "hits": key.hits,
+                "misses": key.misses,
+                "size": key.size,
+                "ttl": key.ttl,
+                "negative_ttl": key.effective_negative_ttl,
+            },
+        }
 
     # =========================================================================
     # Utility Methods
@@ -548,7 +635,4 @@ class AuthGuard:
         )
 
     def __repr__(self) -> str:
-        return (
-            f"AuthGuard(auth_url={self._config.auth_url!r}, "
-            f"initialized={self._initialized})"
-        )
+        return f"AuthGuard(auth_url={self._config.auth_url!r}, " f"initialized={self._initialized})"

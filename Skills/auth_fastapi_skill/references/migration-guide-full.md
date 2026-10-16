@@ -166,7 +166,7 @@ This guide will help with all of these.
 15. [Writing Security Tests](#15-writing-security-tests)
 
 **Part VI: Operations**
-16. [Ticket Workflow](#16-ticket-workflow)
+16. [Tracking the Integration](#16-tracking-the-integration)
 17. [File Reference](#17-file-reference)
 18. [Troubleshooting](#18-troubleshooting)
 
@@ -2204,14 +2204,14 @@ fi
 
 # Part VI: Operations
 
-## 16. Ticket Workflow
+## 16. Tracking the Integration
 
-### 16.1 Creating a Ticket
+### 16.1 Creating a Tracking Folder
 
-When starting auth integration, create a ticket folder:
+When starting auth integration, create a tracking folder:
 
 ```
-tickets/YYYYMMDD_ab0t_auth_integration/
+docs/ab0t_auth_integration/
 ├── TICKET.md              # Requirements, scope, acceptance criteria
 ├── IMPLEMENTATION_PLAN.md # Step-by-step tasks
 ├── CHECKLIST.md           # Verification checklist
@@ -2223,9 +2223,7 @@ tickets/YYYYMMDD_ab0t_auth_integration/
 
 ### 16.2 Documentation Templates
 
-See the existing tickets for templates:
-- `resource/output/tickets/20260202_ab0t_auth_integration/`
-- `sandbox-platform/tickets/20260203_secure_multi_tenant_auth_refactor/`
+Keep the same structure for every service you integrate so reviews stay comparable.
 
 ---
 

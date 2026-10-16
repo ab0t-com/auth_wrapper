@@ -94,3 +94,14 @@ Thumbs.db
 # Documentation builds
 docs/_build/
 site/
+
+# Internal development artifacts — MUST NOT ship in the public repo
+# (they stay out of the wheel/sdist already; this keeps them out of a repo push too)
+tickets/
+.archive/
+tasklist*.md
+*_security_audit.md
+SECURITY_REVIEW*.md
+RELEASE_PLAN*.md
+work_log*.md
+ISSUE-*.md

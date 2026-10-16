@@ -34,7 +34,6 @@ from ab0t_auth.permissions import (
     verify_permission,
 )
 
-
 # =============================================================================
 # Type Aliases for FastAPI
 # =============================================================================
@@ -134,6 +133,23 @@ async def _run_auth_checks(
         raise PermissionDeniedError(check_error)
 
 
+async def _authenticate(
+    guard: AuthGuard,
+    authorization: str | None,
+    api_key: str | None,
+    fresh: bool,
+) -> AuthenticatedUser:
+    """Authenticate via the guard; `fresh` is passed only when set (keeps two-argument overrides/mocks working)."""
+    if fresh:
+        return await guard.authenticate_or_raise(authorization, api_key, fresh=True)
+    return await guard.authenticate_or_raise(authorization, api_key)
+
+
+def _fresh_kwargs(fresh: bool) -> dict[str, Any]:
+    """Keyword args for verify_* calls: `fresh` only when set (keeps patched verify_* functions working)."""
+    return {"fresh": True} if fresh else {}
+
+
 # =============================================================================
 # Dependency Factory Functions
 # =============================================================================
@@ -147,6 +163,7 @@ def require_auth(
     checks: Sequence[AuthCheckCallable] | None = None,
     check_mode: Literal["all", "any"] = "all",
     check_error: str = "Authorization check failed",
+    fresh: bool = False,
 ) -> Callable[..., Any]:
     """
     Create dependency that requires authentication.
@@ -161,6 +178,7 @@ def require_auth(
         checks: List of authorization check callbacks (optional)
         check_mode: "all" requires all checks pass, "any" requires one
         check_error: Error message when check fails
+        fresh: Skip the token / API-key caches on this route (re-validate every request)
 
     The check callback signature:
         def my_check(user: AuthenticatedUser, request: Request) -> bool:
@@ -190,7 +208,7 @@ def require_auth(
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
         api_key = x_api_key if allow_api_key else None
-        user = await guard.authenticate_or_raise(authorization, api_key)
+        user = await _authenticate(guard, authorization, api_key, fresh)
 
         # Run authorization checks if provided
         await _run_auth_checks(user, request, check, checks, check_mode, check_error)
@@ -209,6 +227,7 @@ def require_permission(
     checks: Sequence[AuthCheckCallable] | None = None,
     check_mode: Literal["all", "any"] = "all",
     check_error: str = "Authorization check failed",
+    fresh: bool = False,
 ) -> Callable[..., Any]:
     """
     Create dependency that requires specific permission.
@@ -216,6 +235,9 @@ def require_permission(
     Factory function returning FastAPI dependency.
     Raises PermissionDeniedError if permission not granted.
     Additional checks run AFTER permission check.
+
+    `fresh=True` (for sensitive routes: admin, money movement, ownership changes) skips every decision cache on this
+    route: the credential is re-validated and, in server mode, /permissions/check is asked on every request.
 
     Example:
         @app.delete("/users/{id}")
@@ -232,7 +254,7 @@ def require_permission(
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
         api_key = x_api_key if allow_api_key else None
-        user = await guard.authenticate_or_raise(authorization, api_key)
+        user = await _authenticate(guard, authorization, api_key, fresh)
 
         # Check permission based on configured mode
         if guard._config.permission_check_mode == "server":
@@ -245,6 +267,7 @@ def require_permission(
                 permission,
                 cache=guard._permission_cache,
                 api_key=api_key,  # Pass API key for X-API-Key auth
+                **_fresh_kwargs(fresh),
             )
         else:
             # Client-side check from JWT claims (default)
@@ -273,12 +296,14 @@ def require_any_permission(
     checks: Sequence[AuthCheckCallable] | None = None,
     check_mode: Literal["all", "any"] = "all",
     check_error: str = "Authorization check failed",
+    fresh: bool = False,
 ) -> Callable[..., Any]:
     """
     Create dependency that requires any of the specified permissions.
 
     Factory function returning FastAPI dependency.
     Additional checks run AFTER permission check.
+    `fresh=True` skips every decision cache on this route (see require_permission).
 
     Example:
         @app.get("/reports")
@@ -296,7 +321,7 @@ def require_any_permission(
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
         api_key = x_api_key if allow_api_key else None
-        user = await guard.authenticate_or_raise(authorization, api_key)
+        user = await _authenticate(guard, authorization, api_key, fresh)
 
         # Check permission based on configured mode
         if guard._config.permission_check_mode == "server":
@@ -309,6 +334,7 @@ def require_any_permission(
                 *permissions,
                 cache=guard._permission_cache,
                 api_key=api_key,  # Pass API key for X-API-Key auth
+                **_fresh_kwargs(fresh),
             )
         else:
             # Client-side check from JWT claims (default)
@@ -337,12 +363,14 @@ def require_all_permissions(
     checks: Sequence[AuthCheckCallable] | None = None,
     check_mode: Literal["all", "any"] = "all",
     check_error: str = "Authorization check failed",
+    fresh: bool = False,
 ) -> Callable[..., Any]:
     """
     Create dependency that requires all specified permissions.
 
     Factory function returning FastAPI dependency.
     Additional checks run AFTER permission check.
+    `fresh=True` skips every decision cache on this route (see require_permission).
 
     Example:
         @app.post("/sensitive-operation")
@@ -360,7 +388,7 @@ def require_all_permissions(
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
         api_key = x_api_key if allow_api_key else None
-        user = await guard.authenticate_or_raise(authorization, api_key)
+        user = await _authenticate(guard, authorization, api_key, fresh)
 
         # Check permission based on configured mode
         if guard._config.permission_check_mode == "server":
@@ -373,6 +401,7 @@ def require_all_permissions(
                 *permissions,
                 cache=guard._permission_cache,
                 api_key=api_key,  # Pass API key for X-API-Key auth
+                **_fresh_kwargs(fresh),
             )
         else:
             # Client-side check from JWT claims (default)
@@ -497,9 +526,7 @@ def optional_auth(
 
         # Run checks if provided; return None on failure (don't raise)
         try:
-            await _run_auth_checks(
-                user, request, check, checks, check_mode, "Check failed"
-            )
+            await _run_auth_checks(user, request, check, checks, check_mode, "Check failed")
         except PermissionDeniedError:
             return None
 
@@ -563,8 +590,9 @@ def get_auth_context(
                 "timestamp": ctx.timestamp.isoformat(),
             }
     """
-    from ab0t_auth.core import AuthContext
     import uuid
+
+    from ab0t_auth.core import AuthContext
 
     async def dependency(
         request: Request,
@@ -788,12 +816,14 @@ def require_auth_and_permission(
     checks: Sequence[AuthCheckCallable] | None = None,
     check_mode: Literal["all", "any"] = "all",
     check_error: str = "Authorization check failed",
+    fresh: bool = False,
 ) -> Callable[..., Any]:
     """
     Create composite dependency with multiple requirements.
 
     Combines authentication, permission, and optional org check.
     Additional checks run AFTER all other checks.
+    `fresh=True` skips every decision cache on this route (see require_permission).
 
     Example:
         @app.post("/org/billing")
@@ -813,7 +843,7 @@ def require_auth_and_permission(
         x_api_key: ApiKeyHeader = None,
     ) -> AuthenticatedUser:
         api_key = x_api_key if allow_api_key else None
-        user = await guard.authenticate_or_raise(authorization, api_key)
+        user = await _authenticate(guard, authorization, api_key, fresh)
 
         # Check org membership if required
         if require_org and not user.org_id:
@@ -822,8 +852,21 @@ def require_auth_and_permission(
                 required_permission="org:member",
             )
 
-        # Check permission
-        result = check_permission(user, permission)
+        # Check permission — honour permission_check_mode like require_permission
+        # (this path previously always used token claims, so a revoked permission kept passing in server mode).
+        if guard._config.permission_check_mode == "server":
+            result = await verify_permission(
+                guard._http_client,
+                guard._config,
+                authorization or "",
+                user,
+                permission,
+                cache=guard._permission_cache,
+                api_key=api_key,
+                **_fresh_kwargs(fresh),
+            )
+        else:
+            result = check_permission(user, permission)
         if not result.allowed:
             raise PermissionDeniedError(
                 result.reason or f"Permission '{permission}' required",

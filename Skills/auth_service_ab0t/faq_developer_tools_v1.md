@@ -221,7 +221,7 @@ curl -s "$FLOWBASE_API/workflows" \
 ### 4c. Flowbase API gateway validates the key
 
 ```python
-# In Flowbase's FastAPI backend (appv2 pattern)
+# In Flowbase's FastAPI backend
 from ab0t_auth import AuthGuard, AuthenticatedUser
 from fastapi import Depends
 

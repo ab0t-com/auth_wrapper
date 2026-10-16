@@ -29,50 +29,62 @@ Flask Example:
         return {"user_id": get_current_user().user_id}
 """
 
+from ab0t_auth.cache import MeshTokenCache
 from ab0t_auth.core import (
-    AuthenticatedUser,
-    AuthContext,
-    TokenClaims,
-    Permission,
     AuthConfig,
+    AuthContext,
+    AuthenticatedUser,
+    MeshToken,
+    Permission,
+    TokenClaims,
 )
-from ab0t_auth.guard import AuthGuard
 from ab0t_auth.errors import (
     AuthError,
+    AuthServiceError,
+    ClientAuthError,
+    ClientNotEnabledError,
+    ConfigurationError,
+    ConsentRequiredError,
+    MeshTokenError,
+    NoConnectionError,
+    PermissionDeniedError,
+    ReauthenticateRequired,
+    ScopeNotAllowedError,
     TokenExpiredError,
     TokenInvalidError,
     TokenNotFoundError,
-    PermissionDeniedError,
-    AuthServiceError,
 )
+from ab0t_auth.guard import AuthGuard
 from ab0t_auth.tenant import (
-    TenantContext,
-    TenantConfig,
-    TenantExtractionStrategy,
-    Organization,
-    TenantError,
-    TenantRequiredError,
-    TenantAccessDeniedError,
     OrgAccessDeniedError,
+    Organization,
     OrgNotFoundError,
+    TenantAccessDeniedError,
+    TenantConfig,
+    TenantContext,
+    TenantError,
+    TenantExtractionStrategy,
+    TenantRequiredError,
 )
+from ab0t_auth.token_for import new_pkce, token_for
 
 # FastAPI imports (may fail if fastapi not installed)
 try:
+    from ab0t_auth.decorators import permission_required, protected
     from ab0t_auth.dependencies import (
+        get_current_user,
+        optional_auth,
+        require_all_permissions,
+        require_any_permission,
         require_auth,
         require_permission,
-        require_any_permission,
-        require_all_permissions,
-        optional_auth,
-        get_current_user,
     )
     from ab0t_auth.middleware import AuthMiddleware
-    from ab0t_auth.decorators import protected, permission_required
 
     _HAS_FASTAPI = True
 except ImportError:
     _HAS_FASTAPI = False
+
     # Provide stub functions that raise helpful errors
     def _fastapi_not_installed(*args, **kwargs):
         raise ImportError(
@@ -89,7 +101,7 @@ except ImportError:
     protected = _fastapi_not_installed
     permission_required = _fastapi_not_installed
 
-__version__ = "0.1.0"
+__version__ = "0.1.4"
 
 __all__ = [
     # Core types
@@ -98,8 +110,21 @@ __all__ = [
     "TokenClaims",
     "Permission",
     "AuthConfig",
+    "MeshToken",
     # Main guard
     "AuthGuard",
+    # Mesh token exchange (token_for / P3)
+    "token_for",
+    "new_pkce",
+    "MeshTokenCache",
+    "MeshTokenError",
+    "ReauthenticateRequired",
+    "NoConnectionError",
+    "ConsentRequiredError",
+    "ScopeNotAllowedError",
+    "ClientAuthError",
+    "ClientNotEnabledError",
+    "ConfigurationError",
     # FastAPI Dependencies
     "require_auth",
     "require_permission",

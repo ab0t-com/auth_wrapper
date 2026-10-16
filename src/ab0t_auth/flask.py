@@ -29,11 +29,21 @@ import functools
 from contextvars import ContextVar
 from typing import Any, Callable, Literal, ParamSpec, Sequence, TypeVar
 
-from flask import Flask, Request, Response, g, request, jsonify
+from flask import Flask, Request, Response, g, jsonify, request
 
+from ab0t_auth.cache import (
+    ApiKeyCache,
+    JWKSCache,
+    PermissionCache,
+    TokenCache,
+    create_api_key_cache,
+    create_caches,
+)
+from ab0t_auth.client import create_http_client, validate_api_key
+from ab0t_auth.config import create_config
 from ab0t_auth.core import (
-    AuthCheckSync,
     AuthChecksSync,
+    AuthCheckSync,
     AuthConfig,
     AuthContext,
     AuthenticatedUser,
@@ -41,7 +51,6 @@ from ab0t_auth.core import (
     AuthResult,
     TokenType,
 )
-from ab0t_auth.config import create_config
 from ab0t_auth.errors import (
     AuthError,
     PermissionDeniedError,
@@ -53,16 +62,13 @@ from ab0t_auth.jwt import (
     parse_token_header,
     validate_token_pipeline,
 )
+from ab0t_auth.logging import AuthMetrics, get_logger
 from ab0t_auth.permissions import (
     check_all_permissions,
     check_any_permission,
     check_permission,
     check_permission_pattern,
 )
-from ab0t_auth.cache import TokenCache, PermissionCache, JWKSCache, create_caches
-from ab0t_auth.client import create_http_client, validate_api_key
-from ab0t_auth.logging import get_logger, AuthMetrics
-
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -179,6 +185,7 @@ class Ab0tAuth:
         self._token_cache: TokenCache | None = None
         self._permission_cache: PermissionCache | None = None
         self._jwks_cache: JWKSCache | None = None
+        self._api_key_cache: ApiKeyCache | None = None
         self._logger = get_logger("ab0t_auth.flask")
         self._metrics = AuthMetrics()
 
@@ -208,14 +215,11 @@ class Ab0tAuth:
                 audience=self._audience or app.config.get("AB0T_AUTH_AUDIENCE"),
             )
         else:
-            raise ValueError(
-                "Must provide auth_url or set AB0T_AUTH_URL in app config"
-            )
+            raise ValueError("Must provide auth_url or set AB0T_AUTH_URL in app config")
 
         # Initialize components
-        self._token_cache, self._permission_cache, self._jwks_cache = create_caches(
-            self._config
-        )
+        self._token_cache, self._permission_cache, self._jwks_cache = create_caches(self._config)
+        self._api_key_cache = create_api_key_cache(self._config)
 
         if self._config.enable_jwt_auth:
             self._jwk_client = create_jwk_client(self._config)
@@ -304,8 +308,7 @@ class Ab0tAuth:
             if pat.endswith("*"):
                 prefix = pat[:-1]
                 if normalized.startswith(prefix) and (
-                    len(normalized) == len(prefix)
-                    or normalized[len(prefix) :].startswith("/")
+                    len(normalized) == len(prefix) or normalized[len(prefix) :].startswith("/")
                 ):
                     return True
             else:
@@ -317,35 +320,40 @@ class Ab0tAuth:
         self,
         authorization: str | None = None,
         api_key: str | None = None,
+        *,
+        fresh: bool = False,
     ) -> AuthResult:
         """
         Authenticate using token or API key.
 
         Returns AuthResult with success status and user.
+        `fresh=True` skips the token and API-key caches for this call (see AuthGuard.authenticate).
         """
+        extra: dict[str, Any] = {"fresh": True} if fresh else {}
+
         # Try JWT first
         if authorization and self.config.enable_jwt_auth:
-            result = self._authenticate_jwt(authorization)
+            result = self._authenticate_jwt(authorization, **extra)
             self._metrics.record_auth_attempt(result.success)
             if result.success:
                 return result
 
         # Try API key
         if api_key and self.config.enable_api_key_auth:
-            result = self._authenticate_api_key(api_key)
+            result = self._authenticate_api_key(api_key, **extra)
             self._metrics.record_auth_attempt(result.success)
             return result
 
         return AuthResult.fail("NO_CREDENTIALS", "No valid credentials provided")
 
-    def _authenticate_jwt(self, authorization: str) -> AuthResult:
-        """Authenticate using JWT token."""
+    def _authenticate_jwt(self, authorization: str, *, fresh: bool = False) -> AuthResult:
+        """Authenticate using JWT token. `fresh=True` skips the token-cache read."""
         token = parse_token_header(authorization, self.config.header_prefix)
         if not token:
             return AuthResult.fail("INVALID_HEADER", "Invalid Authorization header")
 
         # Check cache
-        if self._token_cache:
+        if self._token_cache and not fresh:
             cached = self._token_cache.get(token)
             if cached:
                 self._metrics.record_cache_access(hit=True)
@@ -357,9 +365,7 @@ class Ab0tAuth:
             if not self._jwk_client:
                 return AuthResult.fail("JWT_DISABLED", "JWT auth not enabled")
 
-            user, claims = validate_token_pipeline(
-                token, self._jwk_client, self.config
-            )
+            user, claims = validate_token_pipeline(token, self._jwk_client, self.config)
 
             # Cache result
             if self._token_cache:
@@ -370,21 +376,34 @@ class Ab0tAuth:
         except AuthError as e:
             return AuthResult.fail(e.code, e.message)
         except Exception as e:
-            return AuthResult.fail("VALIDATION_ERROR", str(e))
+            # the raw exception text is logged, never returned to the caller.
+            self._logger.warning("Token validation error", error=str(e))
+            return AuthResult.fail("VALIDATION_ERROR", "Token validation failed")
 
-    def _authenticate_api_key(self, api_key: str) -> AuthResult:
-        """Authenticate using API key (sync wrapper)."""
+    def _authenticate_api_key(self, api_key: str, *, fresh: bool = False) -> AuthResult:
+        """
+        Authenticate using API key (sync wrapper).
+
+        The auth service's answer is cached (valid 60 s, rejected 10 s by default; 0 disables); errors are never
+        cached and refuse the request. `fresh=True` skips the cache read.
+        """
+        cache = self._api_key_cache
         try:
-            # Run async validation in sync context
-            loop = asyncio.new_event_loop()
-            try:
-                client = create_http_client()
-                response = loop.run_until_complete(
-                    validate_api_key(client, self.config, api_key)
-                )
-                loop.run_until_complete(client.aclose())
-            finally:
-                loop.close()
+            response = cache.get(api_key) if (cache is not None and not fresh) else None
+            if response is None:
+                # Run async validation in sync context
+                loop = asyncio.new_event_loop()
+                try:
+                    client = create_http_client()
+                    response = loop.run_until_complete(
+                        validate_api_key(client, self.config, api_key)
+                    )
+                    loop.run_until_complete(client.aclose())
+                finally:
+                    loop.close()
+                # Only reached with a definite answer: validate_api_key raises on errors, so they are never cached.
+                if cache is not None:
+                    cache.set(api_key, response)
 
             if not response.valid:
                 return AuthResult.fail("INVALID_API_KEY", response.error or "Invalid API key")
@@ -405,8 +424,12 @@ class Ab0tAuth:
             )
             return AuthResult.ok(user)
 
+        except AuthError as e:
+            return AuthResult.fail(e.code, e.message)
         except Exception as e:
-            return AuthResult.fail("API_KEY_ERROR", str(e))
+            # the raw exception text is logged, never returned to the caller.
+            self._logger.warning("API key validation error", error=str(e))
+            return AuthResult.fail("API_KEY_ERROR", "API key validation failed")
 
     # =========================================================================
     # Authorization
@@ -455,6 +478,12 @@ class Ab0tAuth:
             return self._token_cache.invalidate(token)
         return False
 
+    def invalidate_api_key(self, api_key: str) -> bool:
+        """Invalidate the cached validation answer for an API key (e.g. after revoking it)."""
+        if self._api_key_cache is not None:
+            return self._api_key_cache.invalidate(api_key)
+        return False
+
     def clear_caches(self) -> None:
         """Clear all caches."""
         if self._token_cache:
@@ -463,6 +492,8 @@ class Ab0tAuth:
             self._permission_cache.clear()
         if self._jwks_cache:
             self._jwks_cache.clear()
+        if self._api_key_cache is not None:
+            self._api_key_cache.clear()
 
 
 # =============================================================================
@@ -603,6 +634,7 @@ def login_required(
         def tenant_data(tenant_id):
             return {"tenant": tenant_id}
     """
+
     def decorator(func: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(func)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -617,6 +649,7 @@ def login_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return func(*args, **kwargs)
+
         return decorated  # type: ignore
 
     # Support both @login_required and @login_required()
@@ -651,6 +684,7 @@ def permission_required(
         def admin():
             return {"admin": True}
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -670,7 +704,9 @@ def permission_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 
@@ -706,6 +742,7 @@ def permissions_required(
         def any_admin():
             return {"admin": True}
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -729,7 +766,9 @@ def permissions_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 
@@ -759,6 +798,7 @@ def role_required(
         def admin():
             return {"admin": True}
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -776,7 +816,9 @@ def role_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 
@@ -806,6 +848,7 @@ def permission_pattern_required(
         def admin_anything():
             return {"pattern": "matched"}
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -825,7 +868,9 @@ def permission_pattern_required(
             _run_auth_checks_sync(user, check, checks, check_mode, check_error)
 
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 
@@ -846,12 +891,15 @@ def init_blueprint_auth(auth: Ab0tAuth) -> Callable[[Callable[P, T]], Callable[P
         def authenticate():
             pass  # Authentication handled by decorator
     """
+
     def decorator(f: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(f)
         def decorated(*args: P.args, **kwargs: P.kwargs) -> T:
             auth._authenticate_request()
             return f(*args, **kwargs)
+
         return decorated  # type: ignore
+
     return decorator
 
 

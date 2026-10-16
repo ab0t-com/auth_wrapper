@@ -360,6 +360,86 @@ Tenant (Company)
 
 ---
 
+## Calling Another Mesh Service for a Signed-In Person — `token_for`
+
+When your app needs to call **another** service on behalf of a signed-in person, mint a token for that one service
+with `token_for`. It performs an OAuth 2.0 Token Exchange (RFC 8693): the person's token is the `subject_token`, your
+app proves who it is with its own OAuth client credentials, exactly one `resource` (RFC 8707) is requested, and no
+`actor_token` is sent — the authenticated client is the actor.
+
+```python
+import httpx
+from ab0t_auth import token_for, MeshTokenCache
+from ab0t_auth.config import create_config
+
+config = create_config("https://auth.service.ab0t.com")
+cache = MeshTokenCache()  # optional; reuse tokens until shortly before they expire
+
+async with httpx.AsyncClient() as client:
+    tok = await token_for(
+        client, config,
+        "https://documents.service.example",   # the resource (send the token ONLY here)
+        "documents.read",                       # requested scope (space-delimited)
+        person_token,                           # the signed-in person's access token
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        cache=cache,
+    )
+
+# call the resource with the minted token
+resp = await client.get(
+    "https://documents.service.example/v1/docs",
+    headers={"Authorization": tok.authorization_header},
+)
+```
+
+`MeshToken` carries `access_token`, `token_type`, `resource`, `scope` (granted) and `expires_at`.
+
+- **One resource per token.** Send it only to the resource it was requested for. Never forward a token you received
+  to another service — get your own with `token_for`.
+- **Cached** (pass a `MeshTokenCache`): served from memory until 30 s before it expires, and never past the person's
+  own token expiry; keyed by the client, the resource, the sorted scope set and a hash of the person's token — a new
+  sign-in is a new key. Errors are never cached.
+- **No refresh tokens.** Renewing is simply calling again.
+- **Only your client credentials reach the token endpoint** — HTTP Basic by default, or pass `client_auth="post"` for
+  `client_secret_post`. A configured service API key is never sent here.
+
+### What the answers mean
+
+`token_for` classifies failures from the HTTP status and the OAuth `error` / `suberror` members only (never the
+free-text description) onto typed exceptions:
+
+| Wire | Raised | You do |
+|---|---|---|
+| 400 `invalid_request` or `invalid_grant` | `ReauthenticateRequired` | the person's token was not accepted — sign them in again and retry once |
+| 400 `invalid_target` + `suberror: consent_required` | `ConsentRequiredError` | send the person through `err.authorization_url(redirect_uri, state=..., code_challenge=...)` once (use `new_pkce()`), then retry |
+| 400 `invalid_target` | `NoConnectionError` | an org admin must approve the connection |
+| 400 `invalid_scope` | `ScopeNotAllowedError` | ask for less, or have the ceiling widened |
+| 401/400 `invalid_client` | `ClientAuthError` | fix or rotate the secret |
+| 400 `unauthorized_client` | `ClientNotEnabledError` | register the token-exchange grant type |
+| 5xx / 429 / network | `AuthServiceError` | back off and retry; never fall back to an expired token |
+
+```python
+from ab0t_auth import (
+    token_for, new_pkce,
+    ReauthenticateRequired, ConsentRequiredError, NoConnectionError,
+    ScopeNotAllowedError, ClientAuthError, AuthServiceError,
+)
+
+try:
+    tok = await token_for(client, config, resource, scope, person_token,
+                          client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
+except ConsentRequiredError as e:
+    verifier, challenge = new_pkce()   # keep `verifier` for the code exchange
+    redirect_the_person_to(e.authorization_url("https://app.example/cb", state="...", code_challenge=challenge))
+except ReauthenticateRequired:
+    sign_the_person_in_again()
+except AuthServiceError:
+    back_off_and_retry_later()
+```
+
+---
+
 ## FAQ
 
 ### "Why not just use FastAPI's built-in security?"
@@ -418,7 +498,8 @@ result = await verify_permission(client, config, token, user, "sensitive:action"
 **Server mode is recommended** for services using `auth.service.ab0t.com`.
 
 The Ab0t auth service intentionally stores permissions in the database (not in JWT tokens) to support:
-- **Instant revocation** - Permissions removed immediately, no waiting for token expiry
+- **Fast revocation** - Permissions removed server-side take effect within the permission cache window
+  (15 s by default, see [Caching and revocation latency](#caching-and-revocation-latency)), no waiting for token expiry
 - **Dynamic org scoping** - Permissions vary by organization context
 - **Role-based inheritance** - Roles expand to permissions at check time
 
@@ -438,7 +519,54 @@ auth = AuthGuard(
 | Mode | Speed | Use Case |
 |------|-------|----------|
 | `client` (default) | Instant | Offline validation, cached permissions in JWT |
-| `server` | ~5-10ms | Real-time permissions, instant revocation support |
+| `server` | ~5-10ms on a cache miss | Near-real-time permissions (revocation within 15 s; `fresh=True` for immediate) |
+
+### Caching and revocation latency
+
+Every cache below is **on by default**, **configurable**, and **disabled by `0`**. A cache TTL is a security property:
+it is the longest a revoked grant / revoked key / logged-out session can keep working **on your service**. The
+defaults match the Go SDK (`auth-sdk-go`).
+
+| What | Default | Env var (seconds) | What the TTL means |
+|------|---------|-------------------|--------------------|
+| Permission decision, allowed (server mode) | **15 s** | `AB0T_AUTH_PERMISSION_CACHE_TTL` | a revoked grant keeps passing for ≤ 15 s |
+| Permission decision, denied | **5 s** | `AB0T_AUTH_PERMISSION_CACHE_NEGATIVE_TTL` | a new grant is seen within ≤ 5 s |
+| API key, valid | **60 s** | `AB0T_AUTH_API_KEY_CACHE_TTL` | a revoked key keeps working for ≤ 60 s |
+| API key, rejected | **10 s** | `AB0T_AUTH_API_KEY_CACHE_NEGATIVE_TTL` | a newly created / re-enabled key works within ≤ 10 s |
+| Verified JWT | 60 s, never past the token's `exp` | `AB0T_AUTH_TOKEN_CACHE_TTL` | local verification only (see below) |
+| JWKS (public signing keys) | 300 s; unknown `kid` refetched at most once per 60 s | `AB0T_AUTH_JWKS_CACHE_TTL` | key rotation is picked up via the `kid` refetch |
+
+Rules that always hold:
+- **Errors are never cached.** A timeout, network error, `429` or `5xx` from the auth service is not stored; the
+  request that saw it is refused (fail closed) and the next request asks again. An expired entry is never served
+  because a refresh failed.
+- Unset permission/API-key TTLs derive from `AB0T_AUTH_TOKEN_CACHE_TTL`, so `AB0T_AUTH_TOKEN_CACHE_TTL=0` still turns
+  **every** cache off (strict mode), exactly as before.
+- Cache keys are SHA-256 hashes; a raw token or API key is never stored.
+
+**Per-call bypass for sensitive operations** (admin, money movement, ownership changes):
+
+```python
+# Skip every decision cache on this route: re-validate the credential and (server mode) ask /permissions/check
+@app.post("/payouts")
+async def payout(user=Depends(require_permission(auth, "payouts.create", fresh=True))):
+    ...
+
+# Or per call
+result = await verify_permission(client, config, token, user, "payouts.create", cache=cache, fresh=True)
+user = await auth.authenticate_or_raise(authorization, api_key, fresh=True)
+```
+
+**Local JWT verification does not see logout.** A JWT is verified locally (signature, `exp`, `aud`, `iss`) with no
+network call, so a server-side logout or session revocation is **not** visible until the token's own `exp`
+(access tokens are short-lived, ~15 minutes). If a route must refuse a logged-out session immediately, ask the auth
+service, which checks the session:
+- use `permission_check_mode="server"` with `fresh=True` on that route (`/permissions/check` re-validates the bearer), or
+- call `ab0t_auth.client.introspect_token(...)` and require `active is True`.
+
+Observability: `auth.cache_stats()` returns hit/miss counts, size and effective TTLs for the permission and API-key
+caches; JWT cache hits/misses are in `auth.metrics`. To drop an entry immediately: `auth.invalidate_api_key(key)`,
+`auth.invalidate_user_permissions(user_id)`, `auth.invalidate_token(token)`, or `auth.clear_caches()`.
 
 ### "Is this production-ready?"
 
