@@ -32,7 +32,7 @@ that hits one is refused (fail closed) and the next request asks again.
 ## What to do
 
 ```bash
-pip install "ab0t-auth==0.1.4"     # or bump your pinned git ref
+pip install "ab0t-auth @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.4"   # not on PyPI; a PyPI "ab0t-auth" is not ours
 ```
 
 Then run the read-only migration checker from the kit in the ab0t-auth repository (`migrations/v0.1.3-to-v0.1.4/`):

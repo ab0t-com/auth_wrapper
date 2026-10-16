@@ -133,6 +133,6 @@ def test_cache_never_stores_the_raw_credential(fake):
     cache = PermissionCache()
     _verify(_user(AuthMethod.API_KEY), "billing.read", api_key="ab0t_sk_narrow", cache=cache)
     _verify(_user(), "billing.write", token="Bearer owner.jwt", cache=cache)
-    blob = " ".join(cache._cache.keys())
+    blob = " ".join(repr(k) for k in cache._cache.keys())  # keys are tuples since 0.1.5 (P-2)
     assert blob, "no cache entries were written — this assertion would be vacuous"
     assert "ab0t_sk_narrow" not in blob and "owner.jwt" not in blob

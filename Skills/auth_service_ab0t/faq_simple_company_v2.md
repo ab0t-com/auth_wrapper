@@ -571,12 +571,12 @@ question: I am a owner of a company its a saas company, I want to use this servi
   curl -X POST "$AUTH_URL/organizations/acme-corp/auth/token" \
     -d '{"grant_type": "authorization_code", "code": "AUTH_CODE", "client_id": "xxx", "code_verifier": "PKCE_VERIFIER", "redirect_uri": "https://acme.taskflow.com/callback"}'
 
-  Or use the npm SDK:
+  Or use the browser SDK, served by the auth service (not on npm; a package called `@authmesh/sdk` on npm is not ours):
 
-  import { AuthMeshClient } from '@authmesh/sdk';
+  <script src="https://auth.service.ab0t.com/login/_static/authmesh.global.js"></script>
 
-  const auth = new AuthMeshClient({
-    domain: 'auth.service.ab0t.com',
+  const auth = new AuthMesh.AuthMeshClient({
+    domain: 'https://auth.service.ab0t.com',
     org: 'acme-corp',
     clientId: 'xxx',
     redirectUri: 'https://acme.taskflow.com/callback'

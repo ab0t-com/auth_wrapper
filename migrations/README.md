@@ -7,6 +7,7 @@ same steps.
 | Kit | What changes | Source-breaking? |
 |---|---|---|
 | [`v0.1.3-to-v0.1.4/`](v0.1.3-to-v0.1.4/) | Cache defaults aligned with the Go SDK: permission decisions 15 s / 5 s (was 30 s), API keys cached 60 s / 10 s (was uncached), unknown-`kid` JWKS refetch once per 60 s; optional `fresh=True` bypass | No (behavioural: revocation latency) |
+| [`v0.1.4-to-v0.1.5/`](v0.1.4-to-v0.1.5/) | Patch: `resource_type` in the permission-cache key (security), injective tuple key, lower-case `bearer` forwarded as `Bearer`, decision-cache TTLs set in code range-checked 0–300 s | No (a TTL set in code outside 0–300 s now stops start-up, as documented) |
 
 Each kit contains:
 

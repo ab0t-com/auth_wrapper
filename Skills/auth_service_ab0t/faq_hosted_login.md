@@ -197,11 +197,11 @@ question: Following on from the SaaS company guide — I've got my company, my s
   # Get available providers (public, no auth needed)
   curl "$AUTH_URL/organizations/acme-corp/auth/providers"
 
-  Or use the npm SDK:
-  import { AuthMeshClient } from '@authmesh/sdk';
+  Or use the browser SDK, served by the auth service (not on npm; a package called `@authmesh/sdk` on npm is not ours):
+  <script src="https://auth.service.ab0t.com/login/_static/authmesh.global.js"></script>
 
-  const auth = new AuthMeshClient({
-    domain: 'auth.service.ab0t.com',
+  const auth = new AuthMesh.AuthMeshClient({
+    domain: 'https://auth.service.ab0t.com',
     org: 'acme-corp',
     clientId: 'xxx',
     redirectUri: 'https://acme.taskflow.com/callback'

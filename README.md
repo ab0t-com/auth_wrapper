@@ -8,8 +8,6 @@
 pip install git+https://github.com/ab0t-com/auth_wrapper.git
 ```
 
-[![PyPI](https://img.shields.io/pypi/v/ab0t-auth)](https://pypi.org/project/ab0t-auth/)
-[![Python](https://img.shields.io/pypi/pyversions/ab0t-auth)](https://pypi.org/project/ab0t-auth/)
 [![License](https://img.shields.io/github/license/ab0t-com/auth_wrapper)](LICENSE)
 [![Tests](https://img.shields.io/github/actions/workflow/status/ab0t-com/auth_wrapper/tests.yml)](https://github.com/ab0t-com/auth_wrapper/actions)
 
@@ -66,16 +64,18 @@ async def get_data(user = Depends(require_auth(auth))):
 pip install git+https://github.com/ab0t-com/auth_wrapper.git
 ```
 
-### From PyPI (Stable)
+### Pinned Release (Recommended)
 
 ```bash
-pip install ab0t-auth
+pip install "ab0t-auth @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"
 ```
+
+> Not on PyPI. We do not publish `ab0t-auth` to PyPI; a package of that name there is not ours. Install from GitHub as shown.
 
 ### With All Dependencies
 
 ```bash
-pip install "ab0t-auth[dev]"  # Includes testing tools
+pip install "ab0t-auth[dev] @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"  # Includes testing tools
 ```
 
 ### Verify Installation
@@ -543,6 +543,10 @@ Rules that always hold:
 - Unset permission/API-key TTLs derive from `AB0T_AUTH_TOKEN_CACHE_TTL`, so `AB0T_AUTH_TOKEN_CACHE_TTL=0` still turns
   **every** cache off (strict mode), exactly as before.
 - Cache keys are SHA-256 hashes; a raw token or API key is never stored.
+- A permission answer is cached for exactly the question asked: the credential, the org, the permission, and the
+  `resource_type` / `resource_id` if you pass them. An answer for one resource type is never reused for another.
+- The four permission/API-key TTLs accept **0–300 s**, set in code or by env var. A value outside that range stops
+  start-up with an error naming the setting.
 
 **Per-call bypass for sensitive operations** (admin, money movement, ownership changes):
 

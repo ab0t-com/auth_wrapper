@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 
+from ab0t_auth.cache import bearer_credential
 from ab0t_auth.core import (
     ApiKeyValidationResponse,
     AuthConfig,
@@ -73,6 +74,17 @@ def _http_error_message(e: httpx.HTTPStatusError) -> str:
 def _is_true(value: Any) -> bool:
     """Strict boolean read of an auth-service decision field: only JSON `true` allows."""
     return value is True
+
+
+def _bearer_header(token: str) -> str:
+    """Authorization value to forward for a token that may or may not carry its scheme.
+
+    The token may be the raw Authorization header (`Bearer <t>`, or `bearer <t>`, which authentication accepts because
+    the scheme is case-insensitive, RFC 7235 §2.1 / RFC 6750 §2.1) or a bare token. The scheme is removed
+    case-insensitively and re-added in canonical form, so the auth service always receives `Bearer <t>` — never
+    `Bearer bearer <t>` (up to 0.1.4 the check was case-sensitive). Same rule as the permission-cache fingerprint.
+    """
+    return f"Bearer {bearer_credential(token)}"
 
 
 # =============================================================================
@@ -207,8 +219,8 @@ async def validate_token(
     Server-side validation - authoritative check.
     """
     try:
-        # Token may already include "Bearer " prefix from the Authorization header
-        auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
+        # Token may already include a "Bearer " prefix (any case) from the Authorization header
+        auth_header = _bearer_header(token)
         response = await client.post(
             f"{config.auth_url}/auth/validate",
             headers={"Authorization": auth_header},
@@ -319,9 +331,10 @@ async def check_permission(
         # Support both Bearer token and API key authentication
         # Priority: token > api_key (consistent with authentication order)
         # Note: API key is sent as Bearer token since /permissions/check uses HTTPBearer
-        if token:
-            auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
-            headers = {"Authorization": auth_header}
+        # The bearer credential is read with the same rule as the permission-cache fingerprint
+        # (cache.bearer_credential), so the credential forwarded here is the one the cached answer is keyed by.
+        if bearer_credential(token):
+            headers = {"Authorization": _bearer_header(token)}
         elif api_key:
             headers = {"Authorization": f"Bearer {api_key}"}
         else:
@@ -375,8 +388,8 @@ async def get_user_permissions(
     Pure async function returning immutable tuple.
     """
     try:
-        # Token may already include "Bearer " prefix from the Authorization header
-        auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
+        # Token may already include a "Bearer " prefix (any case) from the Authorization header
+        auth_header = _bearer_header(token)
         response = await client.get(
             f"{config.auth_url}/permissions/user/{user_id}",
             headers={"Authorization": auth_header},

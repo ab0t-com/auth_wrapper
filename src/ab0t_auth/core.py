@@ -192,6 +192,8 @@ class AuthConfig:
     # - "client": Fall back to JWT claims (fail-open, maintains availability)
     permission_fallback: Literal["deny", "client"] = "deny"
     # Decision-cache TTLs in seconds. A TTL is the revocation latency on this service. 0 disables that cache.
+    # Range 0..300 (same as the AB0T_AUTH_*_CACHE_* env vars); a value outside it raises ValueError naming the field
+    # when the guard is built (cache.resolve_cache_ttls).
     # None = derived from token_cache_ttl (so token_cache_ttl=0 still disables every cache):
     #   permission: min(token_cache_ttl // 2, 15) -> 15 s by default (allowed answers from /permissions/check)
     #   permission negative: 5 s (denied answers), never longer than the positive TTL

@@ -8,10 +8,11 @@ Uses TTL-based expiration for security.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeAlias, TypeVar
 
 from cachetools import TLRUCache, TTLCache
 
@@ -127,6 +128,23 @@ def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
 
 
+def bearer_credential(token: str | None) -> str:
+    """
+    The credential inside an Authorization value, with a `Bearer` scheme removed (case-insensitive) and whitespace
+    stripped. A value without the scheme (a bare token) is returned stripped.
+
+    RFC 7235 §2.1 / RFC 6750 §2.1: the auth scheme is case-insensitive, so `bearer <t>` and `BEARER <t>` are the same
+    credential as `Bearer <t>` (jwt.parse_token_header already accepts them). This ONE rule is used both to fingerprint
+    the credential for the permission cache and to build the Authorization header sent to the auth service (client.py),
+    so the cache key and the forwarded credential can never disagree.
+    Pure function.
+    """
+    raw = (token or "").strip()
+    if raw[:7].lower() == "bearer ":
+        raw = raw[7:].strip()
+    return raw
+
+
 def permission_credential_fingerprint(token: str | None, api_key: str | None = None) -> str | None:
     """
     Fingerprint of the credential a permission check is ASKED WITH (permission cache keying).
@@ -136,12 +154,14 @@ def permission_credential_fingerprint(token: str | None, api_key: str | None = N
     not be cached, because it cannot be attributed to a credential.
     Pure function.
     """
-    raw = (token or "").strip()
-    if raw[:7].lower() == "bearer ":
-        raw = raw[7:].strip()
+    raw = bearer_credential(token)
     if not raw:
         raw = (api_key or "").strip()
     return hash_token(raw) if raw else None
+
+
+PermissionCacheKey: TypeAlias = tuple[str, str | None, str | None, str, str | None, str | None]
+"""(user_id, credential fingerprint, org, permission, resource_type, resource_id) — see create_permission_cache_key."""
 
 
 def create_permission_cache_key(
@@ -150,27 +170,28 @@ def create_permission_cache_key(
     resource_id: str | None,
     credential: str | None = None,
     org_id: str | None = None,
-) -> str:
+    resource_type: str | None = None,
+) -> PermissionCacheKey:
     """
     Create cache key for permission check.
 
     Permission cache keying: a permission answer belongs to the CREDENTIAL that asked (an API key's own scope, a
-    delegation's scope, a login token's user) and to the ORG it was asked in — never to the user id alone. Keyed
-    `user_id:cred=<fp>:org=<org>:permission[:resource]` so an owner's (or a wide key's) `allowed` is never served to
-    the owner's narrow key, and a narrow key's `denied` never locks the owner out. The user id stays the PREFIX so
-    invalidate_user() still clears every credential of that user. A lookup WITHOUT a credential builds the legacy
-    `user_id:permission` key, which the library never writes any more — so a user-id-only reader always misses
-    (fails over to a real check) instead of reusing another credential's answer.
+    delegation's scope, a login token's user), to the ORG it was asked in, and to EVERY other input of the question
+    sent to /permissions/check (permission, resource type, resource id) — never to the user id alone. So an owner's
+    (or a wide key's) `allowed` is never served to the owner's narrow key, a narrow key's `denied` never locks the
+    owner out, and an allow for (perm, "doc", "42") never answers (perm, "invoice", "42").
+
+    The key is a TUPLE of fixed length, one slot per input, so it is injective: no permission name or id (e.g. one
+    containing ":") can make two different questions share a key (up to 0.1.4 the parts were ":"-joined, and
+    ("docs:read", resource "x") collided with ("docs:read:x")). Falsy resource_type / resource_id are normalised to
+    None because client.check_permission does not send them either — the key reflects exactly the question asked.
+    The user id is slot 0, so invalidate_user() clears every credential of that user. A lookup WITHOUT a credential
+    builds a key with credential=None, which the library never writes — so a user-id-only reader always misses (fails
+    over to a real check) instead of reusing another credential's answer.
     Pure function.
     """
-    parts = [user_id]
-    if credential is not None:
-        parts.append(f"cred={credential}")
-        parts.append(f"org={org_id or ''}")
-    parts.append(permission)
-    if resource_id:
-        parts.append(resource_id)
-    return ":".join(parts)
+    org = (org_id or "") if credential is not None else None
+    return (user_id, credential, org, permission, resource_type or None, resource_id or None)
 
 
 def create_mesh_token_cache_key(
@@ -314,7 +335,7 @@ class PermissionCache:
     max_size: int = 5000
     ttl: int = DEFAULT_PERMISSION_CACHE_TTL  # seconds - short for permission changes
     negative_ttl: int | None = None  # None -> DEFAULT_PERMISSION_CACHE_NEGATIVE_TTL, clamped to <= ttl
-    _cache: TLRUCache[str, bool] = field(init=False, repr=False)
+    _cache: TLRUCache[PermissionCacheKey, bool] = field(init=False, repr=False)
     _negative_ttl: int = field(init=False, repr=False)
     hits: int = field(default=0, init=False)
     misses: int = field(default=0, init=False)
@@ -329,7 +350,7 @@ class PermissionCache:
             timer=lambda: _monotonic(),
         )
 
-    def _time_to_use(self, _key: str, allowed: bool, now: float) -> float:
+    def _time_to_use(self, _key: PermissionCacheKey, allowed: bool, now: float) -> float:
         """Per-entry expiry: positive answers live `ttl`, negative answers `negative_ttl`."""
         return now + (self.ttl if allowed else self._negative_ttl)
 
@@ -351,9 +372,13 @@ class PermissionCache:
         *,
         credential: str | None = None,
         org_id: str | None = None,
+        resource_type: str | None = None,
     ) -> bool | None:
-        """Get cached permission result for THIS credential in THIS org (see create_permission_cache_key)."""
-        key = create_permission_cache_key(user_id, permission, resource_id, credential, org_id)
+        """Get cached permission result for THIS credential in THIS org, for exactly this question (permission,
+        resource type, resource id) — see create_permission_cache_key."""
+        key = create_permission_cache_key(
+            user_id, permission, resource_id, credential, org_id, resource_type
+        )
         value = self._cache.get(key)
         if value is None:
             self.misses += 1
@@ -370,21 +395,25 @@ class PermissionCache:
         *,
         credential: str | None = None,
         org_id: str | None = None,
+        resource_type: str | None = None,
     ) -> None:
-        """Cache permission check result for THIS credential in THIS org (no-op when the cache is disabled)."""
+        """Cache permission check result for THIS credential in THIS org, for exactly this question (no-op when the
+        cache is disabled)."""
         allowed = bool(allowed)
         if not self.enabled or (not allowed and self._negative_ttl <= 0):
             return
-        key = create_permission_cache_key(user_id, permission, resource_id, credential, org_id)
+        key = create_permission_cache_key(
+            user_id, permission, resource_id, credential, org_id, resource_type
+        )
         self._cache[key] = allowed
 
     def invalidate_user(self, user_id: str) -> int:
         """
-        Invalidate all cached permissions for a user.
+        Invalidate all cached permissions for a user (every credential, org and resource of exactly this user id).
 
         Returns count of invalidated entries.
         """
-        to_delete = [k for k in list(self._cache.keys()) if k.startswith(f"{user_id}:")]
+        to_delete = [k for k in list(self._cache.keys()) if k[0] == user_id]
         for key in to_delete:
             self._cache.pop(key, None)
         return len(to_delete)
@@ -670,12 +699,34 @@ _TTL_ENV = {
 }
 
 
+_TTL_MAX_SECONDS = 300
+"""Documented range of the four decision-cache TTLs is 0..300 s (AuthSettings, env vars and AuthConfig fields)."""
+
+_ttl_logger = logging.getLogger("ab0t_auth.cache")
+
+
 def _ttl_setting(config: AuthConfig, field_name: str) -> int | None:
-    """Explicit config value, else the env var, else None (derive). An unparsable or out-of-range env value raises —
-    a typo in an opt-out must not silently leave the cache on (same strictness as AuthSettings)."""
+    """Explicit config value, else the env var, else None (derive). An unparsable value raises, whether it was set in
+    code or in the env — a typo in an opt-out must not silently leave the cache on. An out-of-range ENV value raises
+    (as before, same strictness as AuthSettings). An out-of-range value set in CODE is CLAMPED into 0..300 with a
+    warning: a TTL is the revocation latency, so a day must not be honoured, but up to 0.1.4 such a value was
+    accepted, and a patch release must not stop a client's service from starting (it may be refused in a later
+    minor release). Clamping only ever shortens the cache (above 300 → 300) or turns it off (below 0 → 0)."""
     value = getattr(config, field_name, None)
     if value is not None:
-        return int(value)
+        try:
+            coded = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"AuthConfig.{field_name} must be an integer number of seconds (0-{_TTL_MAX_SECONDS})"
+            ) from None
+        if not 0 <= coded <= _TTL_MAX_SECONDS:
+            clamped = min(max(coded, 0), _TTL_MAX_SECONDS)
+            _ttl_logger.warning(
+                "AuthConfig.%s=%s is outside the documented 0-%s seconds; using %s. Set a value in range "
+                "(a later minor release will refuse it).", field_name, coded, _TTL_MAX_SECONDS, clamped)
+            return clamped
+        return coded
     env_name = _TTL_ENV[field_name]
     raw = os.environ.get(env_name, "").strip()
     if raw == "":
@@ -683,9 +734,9 @@ def _ttl_setting(config: AuthConfig, field_name: str) -> int | None:
     try:
         parsed = int(raw)
     except ValueError:
-        raise ValueError(f"{env_name} must be an integer number of seconds (0-300)") from None
-    if not 0 <= parsed <= 300:
-        raise ValueError(f"{env_name} must be between 0 and 300 seconds")
+        raise ValueError(f"{env_name} must be an integer number of seconds (0-{_TTL_MAX_SECONDS})") from None
+    if not 0 <= parsed <= _TTL_MAX_SECONDS:
+        raise ValueError(f"{env_name} must be between 0 and {_TTL_MAX_SECONDS} seconds")
     return parsed
 
 

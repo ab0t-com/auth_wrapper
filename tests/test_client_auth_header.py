@@ -218,7 +218,7 @@ class TestBearerPrefixEdgeCases:
         mock_response.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_response
 
-        # lowercase bearer - should NOT be treated as already having prefix
+        # lowercase bearer - the scheme is case-insensitive (RFC 7235 §2.1), so it IS the prefix
         token = "bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test"
         request = PermissionCheckRequest(
             user_id="user_123",
@@ -230,9 +230,11 @@ class TestBearerPrefixEdgeCases:
         call_kwargs = mock_client.post.call_args[1]
         auth_header = call_kwargs["headers"]["Authorization"]
 
-        # Current implementation only checks "Bearer " (case-sensitive)
-        # So "bearer " would get prefixed again
-        assert auth_header == f"Bearer {token}"
+        # Up to 0.1.4 this test pinned the case-sensitive check, i.e. the forwarded value was
+        # f"Bearer {token}" == "Bearer bearer eyJ..." — which the auth service rejects (finding P-3,
+        # tickets/20261016_test_hardening_findings). Fixed in 0.1.5: normalised to the canonical scheme.
+        assert auth_header == "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test"
+        assert not auth_header.lower().startswith("bearer bearer")
 
     @pytest.mark.asyncio
     async def test_empty_token_raises_error(

@@ -157,7 +157,7 @@ permission and API-key caches), and `ab0t_auth.cache.resolve_cache_ttls(config)`
 
 ```bash
 ./migrate-check.sh .                     # exit 0
-pip install "ab0t-auth==0.1.4"           # or bump your pinned git ref
+pip install "ab0t-auth @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.4"   # not on PyPI; a PyPI "ab0t-auth" is not ours
 pytest                                   # your suite
 python -c "from ab0t_auth import AuthGuard; print(AuthGuard(auth_url='https://auth.example').cache_stats())"
 ```

@@ -45,14 +45,16 @@ Permissions:     Client-side checks using token claims
 SECTION 2: INSTALLATION
 ================================================================================
 
-# Basic installation
-pip install ab0t-auth
+# Not on PyPI: a package called "ab0t-auth" on PyPI is not ours. Install from GitHub.
+
+# Basic installation (pinned release)
+pip install "ab0t-auth @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"
 
 # With FastAPI support
-pip install "ab0t-auth[fastapi]"
+pip install "ab0t-auth[fastapi] @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"
 
 # With all extras (dev tools)
-pip install "ab0t-auth[dev]"
+pip install "ab0t-auth[dev] @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"
 
 # From GitHub (latest)
 pip install git+https://github.com/ab0t-com/auth_wrapper.git
@@ -1238,7 +1240,7 @@ STEP 1: ASSESSMENT
 STEP 2: INSTALLATION
 --------------------
 [ ] Add ab0t-auth to requirements/pyproject.toml
-[ ] Install: pip install "ab0t-auth[fastapi]"
+[ ] Install: pip install "ab0t-auth[fastapi] @ git+https://github.com/ab0t-com/auth_wrapper.git@v0.1.5"
 [ ] Verify: python -c "from ab0t_auth import AuthGuard; print('OK')"
 
 STEP 3: CONFIGURATION
